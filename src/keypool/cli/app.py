@@ -9,8 +9,10 @@ from typing import Any, TypeVar
 
 import typer
 
+from keypool.cli.commands.alerts import alerts_app
 from keypool.cli.commands.analytics import analytics_app
 from keypool.cli.commands.backup import backup_app, cmd_restore
+from keypool.cli.commands.benchmark import benchmark_app
 from keypool.cli.commands.budgets import budgets_app
 from keypool.cli.commands.credentials import (
     cmd_add,
@@ -205,6 +207,9 @@ app.add_typer(plugins_app, name="plugins")
 app.add_typer(env_app, name="env")
 app.add_typer(requests_app, name="requests")
 app.add_typer(gateway_app, name="gateway")
+app.add_typer(alerts_app, name="alerts")
+app.add_typer(alerts_app, name="alert")
+app.add_typer(benchmark_app, name="benchmark")
 
 app.command("restore")(handle_cli_errors(cmd_restore))
 app.command("mcp")(handle_cli_errors(cmd_mcp))

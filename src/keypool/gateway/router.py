@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from keypool.cli.formatting import RuntimeContext
+from keypool.core.alias_manager import ModelAliasManager
 from keypool.core.model_catalog import ModelCatalogManager
 
 # Default model aliases mapping to candidate provider/model targets
@@ -50,14 +51,19 @@ class GatewayRouter:
     def __init__(self, ctx: RuntimeContext) -> None:
         self.ctx = ctx
         self.catalog = ModelCatalogManager(ctx.db)
+        self.alias_mgr = ModelAliasManager(ctx.db)
 
     def resolve(self, requested_model: str) -> ResolvedRoute:
         """Resolve a requested model string or alias into a provider and target model."""
         model_name = requested_model.strip()
         alias_used: str | None = None
 
-        # 1. Check for alias expansion
-        if model_name.lower() in DEFAULT_MODEL_ALIASES:
+        # 1. Check for alias expansion in database
+        db_alias = self.alias_mgr.get_alias(model_name)
+        if db_alias:
+            alias_used = model_name
+            model_name = db_alias["target"]
+        elif model_name.lower() in DEFAULT_MODEL_ALIASES:
             alias_used = model_name.lower()
             candidates = DEFAULT_MODEL_ALIASES[alias_used]
             # Select first candidate whose provider has credentials in DB

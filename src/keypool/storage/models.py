@@ -323,3 +323,43 @@ class CatalogModelRecord(Base):
     output_price_per_1m: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     is_deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+
+class ModelAliasRecord(Base):
+    """Routing aliases mapping friendly shortcuts to provider/model endpoints."""
+
+    __tablename__ = "model_aliases"
+
+    alias: Mapped[str] = mapped_column(String(64), primary_key=True)
+    target: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+
+class AlertRuleRecord(Base):
+    """Rules defining automated alert triggers for budgets, health, and expiration."""
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_triggered_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+
+class AlertEventRecord(Base):
+    """Historical alert notifications triggered by system monitoring."""
+
+    __tablename__ = "alert_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="warning")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

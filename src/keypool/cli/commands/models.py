@@ -154,3 +154,88 @@ def cmd_models_inspect(
             box=box.ROUNDED,
         )
     )
+
+
+alias_app = typer.Typer(
+    name="alias",
+    help="Manage model routing aliases (shortcuts mapping to provider/model endpoints).",
+    no_args_is_help=True,
+)
+models_app.add_typer(alias_app, name="alias")
+models_app.add_typer(alias_app, name="aliases")
+
+
+@alias_app.command("list")
+def cmd_alias_list(
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """List all configured model routing aliases."""
+    from keypool.core.alias_manager import ModelAliasManager
+
+    ctx = RuntimeContext()
+    mgr = ModelAliasManager(ctx.db)
+    aliases = mgr.list_aliases()
+
+    if json_output:
+        emit_json("models.alias.list", {"aliases": aliases})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    table = Table(title="Model Routing Aliases", box=box.ROUNDED)
+    table.add_column("Alias", style="bold cyan")
+    table.add_column("Target Target", style="bold white")
+    table.add_column("Description", style="dim")
+
+    for a in aliases:
+        table.add_row(a["alias"], a["target"], a["description"])
+
+    console.print(table)
+
+
+@alias_app.command("set")
+def cmd_alias_set(
+    alias: str = typer.Argument(..., help="Alias name (e.g. 'coding', 'fast', 'smart')."),
+    target: str = typer.Argument(
+        ..., help="Target model or provider/model (e.g. 'groq/llama-3.3-70b-versatile')."
+    ),
+    description: str | None = typer.Option(
+        None, "--description", "-d", help="Optional description."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Create or update a model alias shortcut."""
+    from keypool.core.alias_manager import ModelAliasManager
+
+    ctx = RuntimeContext()
+    mgr = ModelAliasManager(ctx.db)
+    res = mgr.set_alias(alias=alias, target=target, description=description)
+
+    if json_output:
+        emit_json("models.alias.set", res)
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    console.print(f"[bold green]Alias '{alias}' mapped to '{target}'.[/bold green]")
+
+
+@alias_app.command("remove")
+def cmd_alias_remove(
+    alias: str = typer.Argument(..., help="Alias name to remove."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Delete a model alias shortcut."""
+    from keypool.core.alias_manager import ModelAliasManager
+
+    ctx = RuntimeContext()
+    mgr = ModelAliasManager(ctx.db)
+    removed = mgr.remove_alias(alias=alias)
+
+    if json_output:
+        emit_json("models.alias.remove", {"alias": alias, "removed": removed})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    if removed:
+        console.print(f"[bold green]Alias '{alias}' removed.[/bold green]")
+    else:
+        console.print(f"[yellow]Alias '{alias}' not found.[/yellow]")

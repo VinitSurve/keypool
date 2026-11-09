@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 from keypool.config.defaults import DEFAULT_PROFILES
 from keypool.core.exceptions import StorageError
 from keypool.storage.models import (
+    AlertRuleRecord,
     Base,
     CatalogModelRecord,
+    ModelAliasRecord,
     ProfileRecord,
     SchemaMigrationRecord,
     utc_now_iso,
@@ -181,12 +183,70 @@ def _migration_v2(session: Session) -> None:
             )
 
 
+def _migration_v3(session: Session) -> None:
+    """Schema v3: model aliases and alert rules/events."""
+    now = utc_now_iso()
+    default_aliases = [
+        ("fast", "groq/llama-3.3-70b-versatile", "Fastest low-latency inference"),
+        (
+            "smart",
+            "anthropic/claude-3-5-sonnet-20241022",
+            "High-intelligence reasoning and synthesis",
+        ),
+        (
+            "coding",
+            "anthropic/claude-3-5-sonnet-20241022",
+            "Optimized for software development and refactoring",
+        ),
+        ("reasoning", "openai/o1", "Deep multi-step reasoning and mathematical analysis"),
+        ("cheap", "groq/llama-3.1-8b-instant", "Most cost-effective budget inference"),
+    ]
+    for alias_name, target, desc in default_aliases:
+        existing_alias = session.get(ModelAliasRecord, alias_name)
+        if existing_alias is None:
+            session.add(
+                ModelAliasRecord(
+                    alias=alias_name,
+                    target=target,
+                    description=desc,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    default_rules = [
+        ("rule_budget_80", "budget_threshold", None, 80.0, True),
+        ("rule_budget_100", "budget_threshold", None, 100.0, True),
+        ("rule_health_fail", "credential_health", None, None, True),
+        ("rule_expiry_7d", "credential_expiry", None, 7.0, True),
+    ]
+    for rid, rtype, target_id, thresh, en in default_rules:
+        existing_rule = session.get(AlertRuleRecord, rid)
+        if existing_rule is None:
+            session.add(
+                AlertRuleRecord(
+                    id=rid,
+                    rule_type=rtype,
+                    target_id=target_id,
+                    threshold=thresh,
+                    enabled=en,
+                    last_triggered_at=None,
+                    created_at=now,
+                )
+            )
+
+
 MIGRATIONS: list[tuple[int, str, MigrationCallable]] = [
     (1, "Initial schema: credentials, profiles, health, models, and usage tables", _migration_v1),
     (
         2,
         "Schema v2: project awareness, budgets, model catalog, credential tags & intelligence",
         _migration_v2,
+    ),
+    (
+        3,
+        "Schema v3: model routing aliases, automated alert rules, and notification events",
+        _migration_v3,
     ),
 ]
 
