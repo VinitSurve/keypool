@@ -56,6 +56,14 @@ def test_sdk_chat_completion_mock(
     assert resp.choices[0].message.content == "Hello SDK user!"
     assert resp.usage.total_tokens == 15
 
+    # Test get_key and context manager
+    with KeypoolClient(profile="testing", runtime_context=runtime_ctx) as cm_client:
+        selected_key = cm_client.get_key(provider="groq")
+        assert selected_key.secret == FAKE_GROQ_KEY_1
+        assert "••••" in selected_key.masked_secret
+        assert selected_key.provider == "groq"
+        assert selected_key.env_var_name == "GROQ_API_KEY"
+
 
 @pytest.mark.anyio
 async def test_async_sdk_client(runtime_ctx: RuntimeContext) -> None:
@@ -64,12 +72,16 @@ async def test_async_sdk_client(runtime_ctx: RuntimeContext) -> None:
     cred = cm.add_credential(provider="groq", name="Async Key", secret=FAKE_GROQ_KEY_1)
     runtime_ctx.profile_manager.assign_credential("testing", cred.id)
 
-    async_client = AsyncKeypoolClient(profile="testing", runtime_context=runtime_ctx)
-    creds = await async_client.list_credentials(provider="groq")
-    assert len(creds) >= 1
+    async with AsyncKeypoolClient(profile="testing", runtime_context=runtime_ctx) as async_client:
+        creds = await async_client.list_credentials(provider="groq")
+        assert len(creds) >= 1
 
-    models = await async_client.list_models(provider="openai")
-    assert len(models) >= 1
+        models = await async_client.list_models(provider="openai")
+        assert len(models) >= 1
+
+        key = await async_client.get_key(provider="groq")
+        assert key.secret == FAKE_GROQ_KEY_1
+        assert key.provider == "groq"
 
 
 def test_mcp_server_protocol_and_tools(runtime_ctx: RuntimeContext) -> None:
@@ -107,6 +119,31 @@ def test_mcp_server_protocol_and_tools(runtime_ctx: RuntimeContext) -> None:
     assert len(parsed_creds) >= 1
     # Secrets must never appear
     assert FAKE_GROQ_KEY_1 not in content_text
+
+    # 4. Call tool: get_usage_summary with 'today'
+    usage_resp = server.handle_request(
+        {
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "get_usage_summary", "arguments": {"period": "today"}},
+        }
+    )
+    assert usage_resp is not None
+    assert usage_resp["result"]["isError"] is False
+    usage_json = json.loads(usage_resp["result"]["content"][0]["text"])
+    assert "total_executions" in usage_json
+
+    # 5. Call tool error resilience
+    err_resp = server.handle_request(
+        {
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "get_usage_summary", "arguments": {"period": "invalid_period_xyz"}},
+        }
+    )
+    assert err_resp is not None
+    assert err_resp["result"]["isError"] is True
+    assert "Error executing tool" in err_resp["result"]["content"][0]["text"]
 
 
 def test_plugin_manager_lifecycle(runtime_ctx: RuntimeContext) -> None:

@@ -111,6 +111,14 @@ class GatewayRouter:
             return ResolvedRoute("gemini", model_name, requested_model, alias_used)
         if lower_name.startswith("command"):
             return ResolvedRoute("cohere", model_name, requested_model, alias_used)
+        if (
+            lower_name.startswith("mistral")
+            or lower_name.startswith("codestral")
+            or lower_name.startswith("pixtral")
+        ):
+            return ResolvedRoute("mistral", model_name, requested_model, alias_used)
+        if lower_name.startswith("deepseek"):
+            return ResolvedRoute("deepseek", model_name, requested_model, alias_used)
         if "llama" in lower_name or "mixtral" in lower_name:
             # Check if groq has credentials
             creds = self.ctx.credential_manager.list_credentials(provider="groq")

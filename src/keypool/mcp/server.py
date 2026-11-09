@@ -128,15 +128,27 @@ class MCPServer:
         if method == "tools/call":
             tool_name = params.get("name")
             arguments = params.get("arguments", {})
-            result_text = self._execute_tool(tool_name, arguments)
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [{"type": "text", "text": result_text}],
-                    "isError": False,
-                },
-            }
+            try:
+                result_text = self._execute_tool(tool_name, arguments)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": result_text}],
+                        "isError": False,
+                    },
+                }
+            except Exception as exc:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": f"Error executing tool '{tool_name}': {exc}"}
+                        ],
+                        "isError": True,
+                    },
+                }
 
         return {
             "jsonrpc": "2.0",

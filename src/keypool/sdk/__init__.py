@@ -6,6 +6,7 @@ from keypool.sdk.models import (
     ChatCompletionChoice,
     ChatCompletionResponse,
     ChatMessage,
+    SelectedKey,
     UsageInfo,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "ChatCompletionResponse",
     "ChatMessage",
     "KeypoolClient",
+    "SelectedKey",
     "UsageInfo",
 ]

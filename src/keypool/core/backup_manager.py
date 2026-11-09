@@ -23,6 +23,7 @@ from keypool.storage.models import (
     BudgetRecord,
     CredentialRecord,
     HealthState,
+    ModelAliasRecord,
     ProfileAssignmentRecord,
     ProfileRecord,
     ProjectRecord,
@@ -94,6 +95,7 @@ class BackupManager:
             "assignments": [],
             "projects": [],
             "budgets": [],
+            "aliases": [],
         }
 
         with self._db.session_scope() as session:
@@ -179,6 +181,17 @@ class BackupManager:
                         "period": b.period,
                         "soft_limit_percent": b.soft_limit_percent,
                         "hard_limit_enabled": b.hard_limit_enabled,
+                    }
+                )
+
+            # Export aliases
+            aliases = session.execute(select(ModelAliasRecord)).scalars().all()
+            for al in aliases:
+                bundle["aliases"].append(
+                    {
+                        "alias": al.alias,
+                        "target": al.target,
+                        "description": al.description,
                     }
                 )
 
@@ -370,5 +383,20 @@ class BackupManager:
                         )
                     )
                     report.budgets_restored += 1
+
+            # 6. Restore aliases
+            for al_dict in bundle.get("aliases", []):
+                al_name = al_dict["alias"]
+                existing_al = session.get(ModelAliasRecord, al_name)
+                if existing_al is None:
+                    session.add(
+                        ModelAliasRecord(
+                            alias=al_name,
+                            target=al_dict["target"],
+                            description=al_dict.get("description"),
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
 
         return report

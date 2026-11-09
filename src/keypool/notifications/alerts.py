@@ -45,71 +45,93 @@ class AlertManager:
         """Run all alert checks and record new alert events."""
         triggered_alerts: list[dict[str, Any]] = []
 
+        rules = self.list_rules()
+        enabled_types = {r["rule_type"] for r in rules if r["enabled"]}
+        expiry_threshold = 7.0
+        for r in rules:
+            if (
+                r["rule_type"] == "credential_expiry"
+                and r["threshold"] is not None
+                and r["enabled"]
+            ):
+                expiry_threshold = float(r["threshold"])
+
         # 1. Evaluate Budget Rules
-        for b in self.budgets.list_budgets():
-            pct = b.percent_used
-            spent = b.current_spend
-            limit = b.amount_limit
-            name = b.name
+        if "budget_threshold" in enabled_types:
+            for b in self.budgets.list_budgets():
+                pct = b.percent_used
+                spent = b.current_spend
+                limit = b.amount_limit
+                name = b.name
 
-            if b.is_exceeded:
-                triggered_alerts.append(
-                    {
-                        "rule_type": "budget_threshold",
-                        "severity": "critical",
-                        "title": f"Budget Exceeded: {name}",
-                        "message": f"Budget '{name}' reached {pct:.1f}% (${spent:.2f} of ${limit:.2f})",
-                    }
-                )
-            elif b.is_warning:
-                triggered_alerts.append(
-                    {
-                        "rule_type": "budget_threshold",
-                        "severity": "warning",
-                        "title": f"Budget Warning: {name}",
-                        "message": f"Budget '{name}' reached {pct:.1f}% (${spent:.2f} of ${limit:.2f})",
-                    }
-                )
+                if b.is_exceeded:
+                    triggered_alerts.append(
+                        {
+                            "rule_type": "budget_threshold",
+                            "severity": "critical",
+                            "title": f"Budget Exceeded: {name}",
+                            "message": f"Budget '{name}' reached {pct:.1f}% (${spent:.2f} of ${limit:.2f})",
+                        }
+                    )
+                elif b.is_warning:
+                    triggered_alerts.append(
+                        {
+                            "rule_type": "budget_threshold",
+                            "severity": "warning",
+                            "title": f"Budget Warning: {name}",
+                            "message": f"Budget '{name}' reached {pct:.1f}% (${spent:.2f} of ${limit:.2f})",
+                        }
+                    )
 
-        # 2. Evaluate Credential Health
+        # 2. Evaluate Credential Health and Expiry
         creds = self.ctx.credential_manager.list_credentials()
         for c in creds:
             if not c.enabled:
                 continue
 
-            if c.status in (
-                HealthState.AUTH_FAILED.value,
-                HealthState.PERMISSION_DENIED.value,
-                HealthState.QUOTA_EXHAUSTED.value,
-            ):
-                triggered_alerts.append(
-                    {
-                        "rule_type": "credential_health",
-                        "severity": "error",
-                        "title": f"Credential Failed: {c.provider.capitalize()}",
-                        "message": f"Credential '{c.name}' [{c.id}] is degraded: {c.status}",
-                    }
-                )
-            elif c.status in (
-                HealthState.RATE_LIMITED.value,
-                HealthState.PROVIDER_UNAVAILABLE.value,
-            ):
-                triggered_alerts.append(
-                    {
-                        "rule_type": "credential_health",
-                        "severity": "warning",
-                        "title": f"Credential Degradation: {c.provider.capitalize()}",
-                        "message": f"Credential '{c.name}' [{c.id}] is temporarily degraded: {c.status}",
-                    }
-                )
+            if "credential_health" in enabled_types:
+                if c.status in (
+                    HealthState.AUTH_FAILED.value,
+                    HealthState.PERMISSION_DENIED.value,
+                    HealthState.QUOTA_EXHAUSTED.value,
+                ):
+                    triggered_alerts.append(
+                        {
+                            "rule_type": "credential_health",
+                            "severity": "error",
+                            "title": f"Credential Failed: {c.provider.capitalize()}",
+                            "message": f"Credential '{c.name}' [{c.id}] is degraded: {c.status}",
+                        }
+                    )
+                elif c.status in (
+                    HealthState.RATE_LIMITED.value,
+                    HealthState.PROVIDER_UNAVAILABLE.value,
+                ):
+                    triggered_alerts.append(
+                        {
+                            "rule_type": "credential_health",
+                            "severity": "warning",
+                            "title": f"Credential Degradation: {c.provider.capitalize()}",
+                            "message": f"Credential '{c.name}' [{c.id}] is temporarily degraded: {c.status}",
+                        }
+                    )
 
             # 3. Evaluate Credential Expiry
-            if c.expires_at:
+            if "credential_expiry" in enabled_types and c.expires_at:
                 with contextlib.suppress(Exception):
                     exp_dt = datetime.datetime.fromisoformat(c.expires_at.replace("Z", "+00:00"))
                     now_dt = datetime.datetime.now(datetime.UTC)
                     days_left = (exp_dt - now_dt).total_seconds() / 86400.0
-                    if 0 < days_left <= 7.0:
+                    if days_left <= 0:
+                        triggered_alerts.append(
+                            {
+                                "rule_type": "credential_expiry",
+                                "severity": "error",
+                                "title": f"Credential Expired: {c.provider.capitalize()}",
+                                "message": f"Credential '{c.name}' [{c.id}] expired {-days_left:.1f} day(s) ago",
+                            }
+                        )
+                    elif days_left <= expiry_threshold:
                         triggered_alerts.append(
                             {
                                 "rule_type": "credential_expiry",
@@ -124,6 +146,16 @@ class AlertManager:
         now = utc_now_iso()
 
         with self.db.session_scope() as session:
+            # Update last_triggered_at for active rule types
+            triggered_rule_types = {a["rule_type"] for a in triggered_alerts}
+            for rt in triggered_rule_types:
+                rule_recs = (
+                    session.execute(select(AlertRuleRecord).where(AlertRuleRecord.rule_type == rt))
+                    .scalars()
+                    .all()
+                )
+                for rr in rule_recs:
+                    rr.last_triggered_at = now
             for alert in triggered_alerts:
                 alert_id = f"alt_{uuid.uuid4().hex[:10]}"
                 rec = AlertEventRecord(

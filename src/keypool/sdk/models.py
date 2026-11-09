@@ -48,3 +48,17 @@ class ChatCompletionResponse(BaseModel):
     provider: str
     choices: list[ChatCompletionChoice] = Field(default_factory=list)
     usage: UsageInfo = Field(default_factory=UsageInfo)
+
+
+class SelectedKey(BaseModel):
+    """Selected credential secret and metadata for SDK callers."""
+
+    model_config = ConfigDict(extra="allow")
+
+    credential_id: str
+    provider: str
+    secret: str
+    masked_secret: str
+    env_var_name: str
+    profile: str | None = None
+    selection_reason: str | None = None

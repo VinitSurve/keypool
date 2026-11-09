@@ -32,7 +32,13 @@ def isolated_env(
 
 
 @pytest.fixture()
-def runtime_ctx(isolated_env: tuple[AppPaths, InMemorySecretStore]) -> RuntimeContext:
+def runtime_ctx(
+    isolated_env: tuple[AppPaths, InMemorySecretStore],
+) -> Iterator[RuntimeContext]:
     """Return an initialized RuntimeContext bound to the isolated test environment."""
     paths, _store = isolated_env
-    return RuntimeContext(paths=paths)
+    ctx = RuntimeContext(paths=paths)
+    try:
+        yield ctx
+    finally:
+        ctx.close()

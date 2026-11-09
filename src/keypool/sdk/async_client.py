@@ -7,7 +7,7 @@ from typing import Any
 import anyio
 
 from keypool.sdk.client import KeypoolClient
-from keypool.sdk.models import ChatCompletionResponse, ChatMessage
+from keypool.sdk.models import ChatCompletionResponse, ChatMessage, SelectedKey
 
 
 class AsyncCompletionsResource:
@@ -65,6 +65,28 @@ class AsyncKeypoolClient:
             runtime_context=runtime_context,
         )
         self.chat = AsyncChatResource(self._sync)
+
+    async def __aenter__(self) -> AsyncKeypoolClient:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        """Release underlying resources asynchronously."""
+        await anyio.to_thread.run_sync(self._sync.close)
+
+    async def get_key(
+        self,
+        provider: str,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> SelectedKey:
+        """Select and retrieve the optimal active API credential for a provider asynchronously."""
+        return await anyio.to_thread.run_sync(
+            lambda: self._sync.get_key(provider=provider, profile=profile, strategy=strategy)
+        )
 
     async def list_models(self, *, provider: str | None = None) -> list[dict[str, Any]]:
         return await anyio.to_thread.run_sync(lambda: self._sync.models.list(provider=provider))

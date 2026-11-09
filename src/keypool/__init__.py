@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from keypool.sdk import AsyncKeypoolClient, KeypoolClient
+from keypool.sdk import AsyncKeypoolClient, KeypoolClient, SelectedKey
 from keypool.version import APP_DISPLAY_NAME, APP_NAME, SCHEMA_VERSION, __version__
 
 __all__ = [
@@ -11,5 +11,6 @@ __all__ = [
     "AsyncKeypoolClient",
     "KeypoolClient",
     "SCHEMA_VERSION",
+    "SelectedKey",
     "__version__",
 ]

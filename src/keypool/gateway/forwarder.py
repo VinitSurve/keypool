@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -28,6 +29,38 @@ class GatewayForwarder:
     def __init__(self, ctx: RuntimeContext) -> None:
         self.ctx = ctx
         self.catalog = ModelCatalogManager(ctx.db)
+
+    def _get_chat_url_and_headers(
+        self, adapter: Any, provider: str, secret: str
+    ) -> tuple[str, dict[str, str]]:
+        """Resolve proper upstream URL and auth headers according to provider dialect."""
+        if provider == "gemini":
+            url = f"{adapter.base_url.rstrip('/')}/openai/chat/completions"
+            headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+        elif provider == "cohere":
+            url = "https://api.cohere.com/compatibility/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+        else:
+            url = f"{adapter.base_url.rstrip('/')}/chat/completions"
+            headers = adapter._build_headers(secret)
+            headers["Content-Type"] = "application/json"
+        return url, headers
+
+    def _get_embeddings_url_and_headers(
+        self, adapter: Any, provider: str, secret: str
+    ) -> tuple[str, dict[str, str]]:
+        """Resolve proper embeddings URL and auth headers."""
+        if provider == "gemini":
+            url = f"{adapter.base_url.rstrip('/')}/openai/embeddings"
+            headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+        elif provider == "cohere":
+            url = "https://api.cohere.com/compatibility/v1/embeddings"
+            headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+        else:
+            url = f"{adapter.base_url.rstrip('/')}/embeddings"
+            headers = adapter._build_headers(secret)
+            headers["Content-Type"] = "application/json"
+        return url, headers
 
     async def forward_chat_completion(
         self,
@@ -153,9 +186,7 @@ class GatewayForwarder:
         is_stream: bool,
         start_time: float,
     ) -> Any:
-        url = f"{adapter.base_url.rstrip('/')}/chat/completions"
-        headers = adapter._build_headers(secret)
-        headers["Content-Type"] = "application/json"
+        url, headers = self._get_chat_url_and_headers(adapter, route.provider, secret)
 
         req_body = dict(payload)
         req_body["model"] = route.target_model
@@ -169,9 +200,11 @@ class GatewayForwarder:
                 resp.raise_for_status()
 
             async def stream_generator() -> AsyncIterator[bytes]:
+                stream_success = False
                 try:
                     async for chunk in resp.aiter_raw():
                         yield chunk
+                    stream_success = True
                 finally:
                     await resp.aclose()
                     await client.aclose()
@@ -179,7 +212,7 @@ class GatewayForwarder:
                     self.ctx.usage_tracker.record_event(
                         provider=route.provider,
                         event_type="gateway_completion",
-                        status="success",
+                        status="success" if stream_success else "failure",
                         credential_id=cred_id,
                         profile_name=profile,
                         model=route.target_model,
@@ -233,7 +266,7 @@ class GatewayForwarder:
         is_stream: bool,
         start_time: float,
     ) -> Any:
-        url = f"{adapter.base_url.rstrip('/')}/v1/messages"
+        url = f"{adapter.base_url.rstrip('/')}/messages"
         headers = adapter._build_headers(secret)
         headers["content-type"] = "application/json"
 
@@ -257,6 +290,87 @@ class GatewayForwarder:
             req_body["system"] = system_prompt
         if "temperature" in payload:
             req_body["temperature"] = payload["temperature"]
+
+        if is_stream:
+            req_body["stream"] = True
+            client = httpx.AsyncClient(timeout=60.0)
+            req = client.build_request("POST", url, headers=headers, json=req_body)
+            resp = await client.send(req, stream=True)
+            if resp.status_code != 200:
+                await resp.aread()
+                resp.raise_for_status()
+
+            chatcmpl_id = f"chatcmpl-{int(time.time() * 1000)}"
+            created_ts = int(time.time())
+
+            async def anthropic_stream_generator() -> AsyncIterator[bytes]:
+                stream_success = False
+                try:
+                    buffer = ""
+                    async for raw_chunk in resp.aiter_raw():
+                        buffer += raw_chunk.decode("utf-8", errors="replace")
+                        while "\n\n" in buffer:
+                            event_block, buffer = buffer.split("\n\n", 1)
+                            for line in event_block.splitlines():
+                                if line.startswith("data:"):
+                                    data_str = line[5:].strip()
+                                    if not data_str:
+                                        continue
+                                    try:
+                                        data_obj = json.loads(data_str)
+                                    except Exception:  # noqa: S112
+                                        continue
+                                    event_type = data_obj.get("type")
+                                    if event_type == "content_block_delta":
+                                        delta_text = data_obj.get("delta", {}).get("text", "")
+                                        if delta_text:
+                                            chunk_dict = {
+                                                "id": chatcmpl_id,
+                                                "object": "chat.completion.chunk",
+                                                "created": created_ts,
+                                                "model": route.target_model,
+                                                "choices": [
+                                                    {
+                                                        "index": 0,
+                                                        "delta": {"content": delta_text},
+                                                        "finish_reason": None,
+                                                    }
+                                                ],
+                                            }
+                                            yield f"data: {json.dumps(chunk_dict)}\n\n".encode()
+                                    elif event_type == "message_stop":
+                                        chunk_dict = {
+                                            "id": chatcmpl_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created_ts,
+                                            "model": route.target_model,
+                                            "choices": [
+                                                {
+                                                    "index": 0,
+                                                    "delta": {},
+                                                    "finish_reason": "stop",
+                                                }
+                                            ],
+                                        }
+                                        yield f"data: {json.dumps(chunk_dict)}\n\n".encode()
+                                        yield b"data: [DONE]\n\n"
+                    stream_success = True
+                finally:
+                    await resp.aclose()
+                    await client.aclose()
+                    duration_ms = (time.monotonic() - start_time) * 1000.0
+                    self.ctx.usage_tracker.record_event(
+                        provider=route.provider,
+                        event_type="gateway_completion",
+                        status="success" if stream_success else "failure",
+                        credential_id=cred_id,
+                        profile_name=profile,
+                        model=route.target_model,
+                        duration_ms=duration_ms,
+                        project_id=project_id,
+                    )
+
+            return StreamingResponse(anthropic_stream_generator(), media_type="text/event-stream")
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, json=req_body)
@@ -326,48 +440,97 @@ class GatewayForwarder:
         profile: str | None = None,
         project_id: str | None = None,
     ) -> Any:
-        """Execute embeddings forward request."""
-        target_profile = profile or self.ctx.settings.default_profile
-        selected = self.ctx.selection_engine.select_credential(
-            provider=route.provider,
-            profile=target_profile,
-            record_usage=False,
-            verify_keychain=True,
-        )
-        cred_id = selected.metadata.id
-        secret = self.ctx.credential_manager.retrieve_secret(cred_id)
-        if not secret:
+        """Execute embeddings forward request with failover across credentials."""
+        target_profile = profile
+        try:
+            candidates = self.ctx.selection_engine.get_ordered_candidates(
+                provider=route.provider,
+                profile=target_profile,
+            )
+        except (CredentialUnavailableError, KeypoolError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Secret for credential '{cred_id}' could not be retrieved from Keychain",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No healthy credential found for provider '{route.provider}': {exc}",
+            ) from exc
+
+        if not candidates:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No healthy eligible credentials found for provider '{route.provider}'",
             )
 
-        adapter = self.ctx.registry.get(route.provider)
-        url = f"{adapter.base_url.rstrip('/')}/embeddings"
-        headers = adapter._build_headers(secret)
-        headers["Content-Type"] = "application/json"
+        last_error_detail = "All credentials exhausted"
+        last_status_code = status.HTTP_502_BAD_GATEWAY
+        attempted_count = 0
 
-        req_body = dict(request_data)
-        req_body["model"] = route.target_model
+        for meta, _prio, _reason in candidates:
+            attempted_count += 1
+            cred_id = meta.id
+            secret = self.ctx.credential_manager.retrieve_secret(cred_id)
+            if not secret:
+                continue
 
-        start_time = time.monotonic()
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, headers=headers, json=req_body)
-            resp.raise_for_status()
-            data = resp.json()
+            adapter = self.ctx.registry.get(route.provider)
+            url, headers = self._get_embeddings_url_and_headers(adapter, route.provider, secret)
 
-        duration_ms = (time.monotonic() - start_time) * 1000.0
-        prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+            req_body = dict(request_data)
+            req_body["model"] = route.target_model
 
-        self.ctx.usage_tracker.record_event(
-            provider=route.provider,
-            event_type="gateway_embeddings",
-            status="success",
-            credential_id=cred_id,
-            profile_name=target_profile,
-            model=route.target_model,
-            duration_ms=duration_ms,
-            project_id=project_id,
-            input_tokens=prompt_tokens,
+            start_time = time.monotonic()
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, headers=headers, json=req_body)
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                duration_ms = (time.monotonic() - start_time) * 1000.0
+                prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+
+                self.ctx.usage_tracker.record_event(
+                    provider=route.provider,
+                    event_type="gateway_embeddings",
+                    status="success",
+                    credential_id=cred_id,
+                    profile_name=target_profile,
+                    model=route.target_model,
+                    duration_ms=duration_ms,
+                    project_id=project_id,
+                    input_tokens=prompt_tokens,
+                )
+                return data
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError):
+                    classification = adapter.classify_error(exc.response)
+                    last_status_code = exc.response.status_code
+                    last_error_detail = exc.response.text
+                else:
+                    classification = ProviderErrorClassification(
+                        state=HealthState.NETWORK_ERROR,
+                        error_category="network_error",
+                        http_status=None,
+                        sanitized_message=str(exc)[:200],
+                        retry_after_seconds=5,
+                        is_retryable=True,
+                    )
+                    last_status_code = status.HTTP_502_BAD_GATEWAY
+                    last_error_detail = str(exc)
+
+                self.ctx.health_manager.record_runtime_failure(cred_id, classification)
+                self.ctx.usage_tracker.record_event(
+                    provider=route.provider,
+                    event_type="gateway_embeddings",
+                    status="failure",
+                    credential_id=cred_id,
+                    profile_name=target_profile,
+                    model=route.target_model,
+                    duration_ms=(time.monotonic() - start_time) * 1000.0,
+                    is_rate_limit=(classification.state == HealthState.RATE_LIMITED),
+                    http_status=classification.http_status,
+                    project_id=project_id,
+                )
+                continue
+
+        raise HTTPException(
+            status_code=last_status_code,
+            detail=f"Gateway failed to complete embeddings request across {attempted_count} credential(s): {last_error_detail}",
         )
-        return data

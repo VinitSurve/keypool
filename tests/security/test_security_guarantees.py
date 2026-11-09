@@ -276,3 +276,35 @@ def test_12_parent_shell_environment_remains_unchanged(runtime_ctx: RuntimeConte
     after = dict(os.environ)
     assert before == after
     assert "GROQ_API_KEY" not in os.environ
+
+
+def test_13_ssrf_and_loopback_protections() -> None:
+    """Assertion 13: SSRF protection blocks cloud metadata, private IPs, and loopback when disabled."""
+    from keypool.providers.custom import validate_provider_endpoint_url
+
+    # Cloud metadata destinations blocked
+    with pytest.raises(SecurityError, match="blocked for security"):
+        validate_provider_endpoint_url("http://169.254.169.254/latest/meta-data")
+
+    with pytest.raises(SecurityError, match="blocked for security"):
+        validate_provider_endpoint_url("http://metadata.google.internal/computeMetadata/v1")
+
+    # Localhost / loopback blocked when allow_localhost=False
+    with pytest.raises(SecurityError, match="restricted"):
+        validate_provider_endpoint_url("http://localhost:8000/v1", allow_localhost=False)
+
+    with pytest.raises(SecurityError, match="restricted"):
+        validate_provider_endpoint_url("http://127.0.0.1:8000/v1", allow_localhost=False)
+
+    with pytest.raises(SecurityError, match="restricted"):
+        validate_provider_endpoint_url("http://test.localhost:8000/v1", allow_localhost=False)
+
+    # Allowed when allow_localhost=True
+    assert (
+        validate_provider_endpoint_url("http://127.0.0.1:8000/v1", allow_localhost=True)
+        == "http://127.0.0.1:8000/v1"
+    )
+    assert (
+        validate_provider_endpoint_url("http://localhost:8000/v1", allow_localhost=True)
+        == "http://localhost:8000/v1"
+    )

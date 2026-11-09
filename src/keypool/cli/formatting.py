@@ -113,6 +113,11 @@ class RuntimeContext:
             usage_tracker=self.usage_tracker,
         )
 
+    def close(self) -> None:
+        """Dispose database engine connections cleanly."""
+        if hasattr(self, "db") and self.db is not None:
+            self.db.close()
+
 
 def get_console(*, stderr: bool = False, color_mode: str = "auto") -> Console:
     """Create a Rich Console respecting terminal color preferences."""

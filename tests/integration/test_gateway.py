@@ -82,6 +82,12 @@ def test_gateway_router_resolves_aliases_and_models(runtime_ctx: Any) -> None:
     route_gpt = router.resolve("gpt-4o")
     assert route_gpt.provider == "openai"
 
+    route_mistral = router.resolve("mistral-large-latest")
+    assert route_mistral.provider == "mistral"
+
+    route_deepseek = router.resolve("deepseek-chat")
+    assert route_deepseek.provider == "deepseek"
+
 
 @pytest.mark.anyio
 async def test_chat_completions_forward_and_failover(runtime_ctx: Any) -> None:
@@ -160,6 +166,210 @@ async def test_chat_completions_forward_and_failover(runtime_ctx: Any) -> None:
     assert report.total_executions >= 2
     assert report.failed_executions >= 1
     assert report.successful_executions >= 1
+
+
+@pytest.mark.anyio
+async def test_gateway_anthropic_streaming_and_translation(runtime_ctx: Any) -> None:
+    runtime_ctx.credential_manager.add_credential(
+        provider="anthropic",
+        name="Claude Key",
+        secret="sk-ant-api03-testkey1234567890abcdef1234567890abcdef",
+        priority=100,
+    )
+
+    token = "test_secret_token"
+    app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
+
+    recorded_urls: list[str] = []
+
+    # 1. Non-streaming Anthropic call
+    anthropic_mock_resp = {
+        "id": "msg_01XyZ",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Anthropic response via Keypool"}],
+        "model": "claude-3-5-haiku-latest",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 7},
+    }
+
+    orig_post = httpx.AsyncClient.post
+
+    async def mock_post(client_self: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
+        url_str = str(url)
+        if "api.anthropic.com" in url_str:
+            recorded_urls.append(url_str)
+            assert "/v1/v1/" not in url_str  # Must not contain double /v1
+            req = httpx.Request("POST", url_str)
+            return httpx.Response(200, request=req, json=anthropic_mock_resp)
+        return await orig_post(client_self, url, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "post", new=mock_post):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "claude-3-5-haiku-latest",
+                    "messages": [{"role": "user", "content": "Ping"}],
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["choices"][0]["message"]["content"] == "Anthropic response via Keypool"
+            assert any(u.endswith("/messages") for u in recorded_urls)
+
+    # 2. Streaming Anthropic call with SSE translation
+    anthropic_sse_stream = (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_123"}}\n\n'
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}\n\n'
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"World!"}}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+
+    orig_send = httpx.AsyncClient.send
+
+    async def mock_send(client_self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
+        url_str = str(request.url)
+        if "api.anthropic.com" in url_str:
+            assert url_str.endswith("/messages")
+            assert "/v1/v1/" not in url_str
+
+            async def aiter_raw() -> Any:
+                yield anthropic_sse_stream
+
+            resp = httpx.Response(200, request=request)
+            object.__setattr__(resp, "aiter_raw", aiter_raw)
+            return resp
+        return await orig_send(client_self, request, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "send", new=mock_send):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "claude-3-5-haiku-latest",
+                    "messages": [{"role": "user", "content": "Ping"}],
+                    "stream": True,
+                },
+            )
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers.get("content-type", "")
+            stream_body = resp.text
+            assert "data: " in stream_body
+            assert "Hello " in stream_body
+            assert "World!" in stream_body
+            assert "data: [DONE]" in stream_body
+
+
+@pytest.mark.anyio
+async def test_gateway_gemini_routing_and_embeddings_failover(runtime_ctx: Any) -> None:
+    runtime_ctx.credential_manager.add_credential(
+        provider="gemini",
+        name="Gemini Key 1",
+        secret="AIzaSyA_GeminiTestKey1_1234567890",
+        priority=100,
+    )
+    runtime_ctx.credential_manager.add_credential(
+        provider="gemini",
+        name="Gemini Key 2",
+        secret="AIzaSyA_GeminiTestKey2_0987654321",
+        priority=50,
+    )
+
+    token = "test_secret_token"
+    app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
+
+    gemini_chat_urls: list[str] = []
+    gemini_auth_headers: list[str] = []
+
+    orig_post = httpx.AsyncClient.post
+
+    async def mock_post(client_self: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
+        url_str = str(url)
+        if "generativelanguage.googleapis.com" in url_str:
+            gemini_chat_urls.append(url_str)
+            headers = kwargs.get("headers", {})
+            if "Authorization" in headers:
+                gemini_auth_headers.append(headers["Authorization"])
+            req = httpx.Request("POST", url_str)
+            return httpx.Response(
+                200,
+                request=req,
+                json={
+                    "id": "chatcmpl-gemini",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "gemini-1.5-flash",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Gemini OK"}}
+                    ],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+                },
+            )
+        return await orig_post(client_self, url, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "post", new=mock_post):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "gemini-1.5-flash",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 200
+            assert any("/openai/chat/completions" in u for u in gemini_chat_urls)
+            assert any("Bearer AIzaSyA_" in h for h in gemini_auth_headers)
+
+    # Embeddings failover: first credential returns 429, second succeeds!
+    call_count = 0
+
+    async def mock_emb_post(client_self: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
+        url_str = str(url)
+        if "generativelanguage.googleapis.com" in url_str:
+            nonlocal call_count
+            call_count += 1
+            req = httpx.Request("POST", url_str)
+            if call_count == 1:
+                resp = httpx.Response(429, request=req, text="Rate limit exceeded")
+                raise httpx.HTTPStatusError("Rate limited", request=req, response=resp)
+            return httpx.Response(
+                200,
+                request=req,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+                    "model": "text-embedding-004",
+                    "usage": {"prompt_tokens": 4, "total_tokens": 4},
+                },
+            )
+        return await orig_post(client_self, url, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "post", new=mock_emb_post):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/embeddings",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "gemini/text-embedding-004",
+                    "input": "Embed this text",
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["data"][0]["embedding"]) == 3
+            assert call_count == 2
 
 
 def test_gateway_cli_commands(isolated_env: Any) -> None:

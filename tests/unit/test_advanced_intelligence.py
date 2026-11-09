@@ -77,6 +77,27 @@ def test_alert_manager_evaluation_and_rules(runtime_ctx: Any) -> None:
     history = mgr.list_alerts(limit=10)
     assert len(history) >= 1
 
+    # Test expired credential alert
+    runtime_ctx.credential_manager.add_credential(
+        provider="groq",
+        name="Expired Key",
+        secret="gsk_EXPIREDTESTKEY000000000000000000000001",
+        expires_at="2020-01-01T00:00:00Z",
+    )
+    exp_alerts = mgr.evaluate_alerts(notify=False)
+    assert any("Credential Expired" in a["title"] for a in exp_alerts)
+
+    # Test disabling alert rule
+    with runtime_ctx.db.session_scope() as session:
+        from keypool.storage.models import AlertRuleRecord
+
+        rule_rec = session.get(AlertRuleRecord, "rule_expiry_7d")
+        if rule_rec:
+            rule_rec.enabled = False
+
+    exp_alerts_disabled = mgr.evaluate_alerts(notify=False)
+    assert not any(a.get("rule_type") == "credential_expiry" for a in exp_alerts_disabled)
+
 
 @pytest.mark.anyio
 async def test_benchmark_engine_execution(runtime_ctx: Any) -> None:
@@ -143,3 +164,33 @@ def test_cli_advanced_intelligence_commands(isolated_env: Any) -> None:
 
     res_check = runner.invoke(app, ["alerts", "check", "--no-notify"])
     assert res_check.exit_code == 0
+
+
+def test_backup_and_restore_includes_aliases(runtime_ctx: Any, tmp_path: Any) -> None:
+    from keypool.core.backup_manager import BackupManager
+
+    alias_mgr = ModelAliasManager(runtime_ctx.db)
+    alias_mgr.set_alias("ultra-fast", "groq/llama-3.1-8b-instant", "Ultra fast alias")
+
+    backup_mgr = BackupManager(
+        db=runtime_ctx.db,
+        secret_store=runtime_ctx.secret_store,
+        credential_manager=runtime_ctx.credential_manager,
+    )
+
+    backup_file = tmp_path / "backup_alias_test.kpb"
+    backup_mgr.create_backup(backup_file, password="test-backup-password-123")
+    assert backup_file.exists()
+
+    # Remove alias from DB
+    alias_mgr.remove_alias("ultra-fast")
+    assert alias_mgr.get_alias("ultra-fast") is None
+
+    # Restore from backup
+    report = backup_mgr.restore_backup(backup_file, password="test-backup-password-123")
+    assert len(report.warnings) == 0
+
+    # Verify alias was restored
+    restored = alias_mgr.get_alias("ultra-fast")
+    assert restored is not None
+    assert restored["target"] == "groq/llama-3.1-8b-instant"

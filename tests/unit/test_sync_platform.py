@@ -64,13 +64,20 @@ def test_sync_bundle_export_and_import_with_conflicts(
 ) -> None:
     mgr = SyncManager(runtime_ctx)
 
-    # Add credential
+    # Add credential, custom profile, and budget
     runtime_ctx.credential_manager.add_credential(
         provider="groq",
         name="Sync Test Groq Key",
         secret=FAKE_GROQ_KEY_1,
         priority=100,
         tags=["prod", "ai"],
+    )
+    runtime_ctx.profile_manager.create_profile("team_sync", description="Sync team profile")
+    mgr.budget_mgr.set_budget(
+        name="Team Monthly",
+        amount_limit=500.0,
+        scope_type="global",
+        period="monthly",
     )
 
     passphrase = "test-sync-secret-pass"
@@ -83,6 +90,11 @@ def test_sync_bundle_export_and_import_with_conflicts(
     res = mgr.import_sync_bundle(bundle_bytes=bundle_bytes, passphrase=passphrase)
     # Existing credential has identical fingerprint -> conflict resolved
     assert res["conflicts_resolved"] == 1
+
+    # Verify profile and budget are present
+    assert runtime_ctx.profile_manager.get_profile("team_sync").description == "Sync team profile"
+    budgets = mgr.budget_mgr.list_budgets()
+    assert any(b.name == "Team Monthly" for b in budgets)
 
 
 def test_cli_sync_commands(isolated_env: Any, tmp_path: Path) -> None:

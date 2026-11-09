@@ -13,8 +13,10 @@ from keypool.sdk.models import (
     ChatCompletionChoice,
     ChatCompletionResponse,
     ChatMessage,
+    SelectedKey,
     UsageInfo,
 )
+from keypool.security.redaction import mask_secret_display
 
 
 class CompletionsResource:
@@ -274,6 +276,42 @@ class KeypoolClient:
         self.models = ModelsResource(self)
         self.credentials = CredentialsResource(self)
         self.health = HealthResource(self)
+
+    def __enter__(self) -> KeypoolClient:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release underlying resources."""
+        self._runtime_ctx.close()
+
+    def get_key(
+        self,
+        provider: str,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> SelectedKey:
+        """Select and retrieve the optimal active API credential for a provider."""
+        target_profile = profile or self.profile
+        selected = self._runtime_ctx.selection_engine.select_credential(
+            provider=provider,
+            profile=target_profile,
+            strategy=strategy,
+            record_usage=True,
+        )
+        secret = self._runtime_ctx.credential_manager.retrieve_secret(selected.metadata.id)
+        return SelectedKey(
+            credential_id=selected.metadata.id,
+            provider=selected.metadata.provider,
+            secret=secret,
+            masked_secret=mask_secret_display(secret),
+            env_var_name=selected.env_var_name,
+            profile=target_profile,
+            selection_reason=selected.selection_reason,
+        )
 
     def _resolve_provider_and_model(self, provider: str | None, model: str) -> tuple[str, str]:
         """Infer or map provider and model according to aliases and project context."""

@@ -249,6 +249,21 @@ class SyncManager:
                 )
                 credentials_synced += 1
 
+        # Import Profiles
+        for p in data.get("profiles", []):
+            pname = p.get("name")
+            if not pname:
+                continue
+            with contextlib.suppress(Exception):
+                try:
+                    self.profile_mgr.get_profile(pname)
+                except Exception:
+                    self.profile_mgr.create_profile(
+                        profile_name=pname,
+                        description=p.get("description", ""),
+                        preferred_provider=p.get("preferred_provider"),
+                    )
+
         # Import Projects
         for p in data.get("projects", []):
             if p.get("root_dir") and self.project_mgr.get_project(p["name"]) is None:
@@ -258,6 +273,20 @@ class SyncManager:
                         root_dir=p["root_dir"],
                         profile_name=p.get("profile_name"),
                     )
+
+        # Import Budgets
+        for b in data.get("budgets", []):
+            with contextlib.suppress(Exception):
+                self.budget_mgr.set_budget(
+                    name=b["name"],
+                    amount_limit=float(b["amount_limit"]),
+                    scope_type=b.get("scope_type", "global"),
+                    scope_target=b.get("scope_target"),
+                    currency=b.get("currency", "USD"),
+                    period=b.get("period", "monthly"),
+                    soft_limit_percent=float(b.get("soft_limit_percent", 80.0)),
+                    hard_limit_enabled=bool(b.get("hard_limit_enabled", False)),
+                )
 
         # Import Aliases
         for a in data.get("aliases", []):

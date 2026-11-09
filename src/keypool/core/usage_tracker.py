@@ -23,14 +23,16 @@ _PERIOD_RE = re.compile(r"^(\d+)\s*([hdwm])$")
 
 
 def parse_period_cutoff(period: str | None) -> str | None:
-    """Parse a period string like '24h', '7d', '30d', '4w' into an ISO 8601 UTC cutoff."""
+    """Parse a period string like '24h', '7d', '30d', '4w', 'today', or 'all' into an ISO 8601 UTC cutoff."""
     if not period or period.strip().lower() in ("all", "*"):
         return None
     cleaned = period.strip().lower()
+    if cleaned == "today":
+        cleaned = "24h"
     match = _PERIOD_RE.match(cleaned)
     if not match:
         raise InvalidArgumentError(
-            f"Invalid period '{period}'. Expected format like '24h', '7d', '30d', '2w', or 'all'."
+            f"Invalid period '{period}'. Expected format like '24h', '7d', '30d', '2w', 'today', or 'all'."
         )
     amount = int(match.group(1))
     unit = match.group(2)

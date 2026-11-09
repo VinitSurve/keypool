@@ -55,6 +55,16 @@ def validate_provider_endpoint_url(raw_url: str, *, allow_localhost: bool = True
             hint="Specify an authorized AI provider API endpoint.",
         )
 
+    # Check loopback hostnames when allow_localhost is False
+    if not allow_localhost and (
+        hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")  # noqa: S104
+        or hostname.endswith((".localhost", ".local", ".internal"))
+    ):
+        raise SecurityError(
+            f"Access to private/loopback host '{hostname}' is restricted.",
+            hint="Enable allow_localhost or use an external HTTPS endpoint.",
+        )
+
     # Check IP literal destinations
     try:
         ip_obj = ipaddress.ip_address(hostname)
@@ -64,7 +74,9 @@ def validate_provider_endpoint_url(raw_url: str, *, allow_localhost: bool = True
                     f"Access to IP address '{hostname}' in network '{net}' is blocked for security.",
                     hint="Cloud metadata and link-local IP addresses are prohibited.",
                 )
-        if not allow_localhost and (ip_obj.is_loopback or ip_obj.is_private):
+        if not allow_localhost and (
+            ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_link_local
+        ):
             raise SecurityError(
                 f"Access to private/loopback IP '{hostname}' is restricted.",
                 hint="Enable allow_localhost or use an external HTTPS endpoint.",
