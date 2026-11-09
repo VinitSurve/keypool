@@ -103,6 +103,19 @@ class ExecutionConfig(BaseModel):
     default_timeout_seconds: int = Field(default=0, ge=0, le=86400)
 
 
+class GatewayConfig(BaseModel):
+    """Local AI Gateway configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=8765, ge=1, le=65535)
+    require_auth: bool = Field(default=True)
+    default_strategy: str = Field(default="priority")
+    fallback_enabled: bool = Field(default=True)
+    max_fallback_attempts: int = Field(default=3, ge=1, le=10)
+
+
 class KeypoolSettings(BaseModel):
     """Root configuration model for KEYPOOL."""
 
@@ -116,6 +129,7 @@ class KeypoolSettings(BaseModel):
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     providers: ProviderDefaultsConfig = Field(default_factory=ProviderDefaultsConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
 
     @field_validator("default_profile")
     @classmethod
@@ -160,6 +174,9 @@ class AppPaths:
         self.config_path: Path = self.app_dir / "config.toml"
         self.logs_dir: Path = self.app_dir / "logs"
         self.log_file: Path = self.logs_dir / "keypool.log"
+        self.gateway_token_path: Path = self.app_dir / "gateway_token"
+        self.gateway_pid_path: Path = self.app_dir / "gateway.pid"
+        self.gateway_log_path: Path = self.logs_dir / "gateway.log"
 
     def ensure_directories(self) -> None:
         """Create app_dir and logs_dir with restrictive 0700 permissions."""

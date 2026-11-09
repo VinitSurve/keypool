@@ -25,6 +25,7 @@ from keypool.cli.commands.credentials import (
 from keypool.cli.commands.diagnostics import cmd_doctor
 from keypool.cli.commands.env_cmd import cmd_completion, env_app
 from keypool.cli.commands.execution import cmd_exec, cmd_get
+from keypool.cli.commands.gateway import gateway_app
 from keypool.cli.commands.health import cmd_health, cmd_status, cmd_test
 from keypool.cli.commands.mcp import cmd_mcp
 from keypool.cli.commands.models import models_app
@@ -203,6 +204,7 @@ app.add_typer(plugins_app, name="plugin")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(env_app, name="env")
 app.add_typer(requests_app, name="requests")
+app.add_typer(gateway_app, name="gateway")
 
 app.command("restore")(handle_cli_errors(cmd_restore))
 app.command("mcp")(handle_cli_errors(cmd_mcp))

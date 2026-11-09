@@ -259,7 +259,10 @@ class UsageTracker:
                     by_provider[prov]["selections"] += 1
                     if cid and cid in rollups:
                         rollups[cid].selections += 1
-                elif evt.event_type == "exec_success":
+                elif (
+                    evt.event_type in ("exec_success", "gateway_completion", "gateway_embeddings")
+                    and evt.status == "success"
+                ):
                     total_executions += 1
                     successful_executions += 1
                     by_provider[prov]["executions"] += 1
@@ -267,7 +270,10 @@ class UsageTracker:
                     if cid and cid in rollups:
                         rollups[cid].executions += 1
                         rollups[cid].successful_executions += 1
-                elif evt.event_type == "exec_failure":
+                elif (
+                    evt.event_type in ("exec_failure", "gateway_completion", "gateway_embeddings")
+                    and evt.status != "success"
+                ) or evt.event_type == "exec_failure":
                     total_executions += 1
                     failed_executions += 1
                     by_provider[prov]["executions"] += 1
