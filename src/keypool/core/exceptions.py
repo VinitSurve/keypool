@@ -78,6 +78,12 @@ class ProviderError(KeypoolError):
     error_code = "provider_error"
 
 
+class ProviderExecutionError(ProviderError):
+    """Raised when an API execution against a provider fails."""
+
+    error_code = "provider_execution_error"
+
+
 class StorageError(KeypoolError):
     """Raised when SQLite or filesystem storage operations fail."""
 

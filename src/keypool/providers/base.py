@@ -153,6 +153,16 @@ class BaseProvider(ABC):
         """Return the official environment variable name expected by SDKs for this provider."""
         return self.env_var_name
 
+    def _build_headers(self, credential: str) -> dict[str, str]:
+        """Build HTTP authentication headers for API requests."""
+        cleaned = credential.strip()
+        register_secret_for_redaction(cleaned)
+        return {
+            "Authorization": f"Bearer {cleaned}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
     def _create_timeout(self) -> httpx.Timeout:
         return httpx.Timeout(self.timeout_seconds, connect=self.connect_timeout_seconds)
 

@@ -23,9 +23,12 @@ from keypool.cli.commands.credentials import (
     cmd_update,
 )
 from keypool.cli.commands.diagnostics import cmd_doctor
+from keypool.cli.commands.env_cmd import cmd_completion, env_app
 from keypool.cli.commands.execution import cmd_exec, cmd_get
 from keypool.cli.commands.health import cmd_health, cmd_status, cmd_test
+from keypool.cli.commands.mcp import cmd_mcp
 from keypool.cli.commands.models import models_app
+from keypool.cli.commands.plugins import plugins_app
 from keypool.cli.commands.profiles import (
     profile_assign,
     profile_create,
@@ -36,6 +39,7 @@ from keypool.cli.commands.profiles import (
 )
 from keypool.cli.commands.projects import projects_app
 from keypool.cli.commands.providers import providers_index, providers_inspect, providers_show
+from keypool.cli.commands.requests import requests_app
 from keypool.cli.commands.usage import cmd_usage
 from keypool.cli.formatting import (
     RuntimeContext,
@@ -195,8 +199,14 @@ app.add_typer(budgets_app, name="budget")
 app.add_typer(budgets_app, name="budgets")
 app.add_typer(backup_app, name="backup")
 app.add_typer(analytics_app, name="analytics")
+app.add_typer(plugins_app, name="plugin")
+app.add_typer(plugins_app, name="plugins")
+app.add_typer(env_app, name="env")
+app.add_typer(requests_app, name="requests")
 
 app.command("restore")(handle_cli_errors(cmd_restore))
+app.command("mcp")(handle_cli_errors(cmd_mcp))
+app.command("completion")(handle_cli_errors(cmd_completion))
 
 
 def cmd_tui() -> None:

@@ -77,7 +77,11 @@ def test_selection_strategies(runtime_ctx: RuntimeContext) -> None:
 
     c_low = cm.add_credential(provider="groq", name="Low Prio", secret=FAKE_GROQ_KEY_1, priority=10)
     c_high = cm.add_credential(
-        provider="groq", name="High Prio", secret=FAKE_GROQ_KEY_2, priority=200, allow_duplicate=True
+        provider="groq",
+        name="High Prio",
+        secret=FAKE_GROQ_KEY_2,
+        priority=200,
+        allow_duplicate=True,
     )
 
     # Priority selection should pick c_high first and c_low last
@@ -100,7 +104,9 @@ def test_project_manager_registration_and_discovery(runtime_ctx: RuntimeContext)
         sub_dir = root_path / "src" / "deep"
         sub_dir.mkdir(parents=True)
 
-        proj = pm.register_project(name="Workspace Alpha", root_dir=root_path, profile_name="development")
+        proj = pm.register_project(
+            name="Workspace Alpha", root_dir=root_path, profile_name="development"
+        )
         assert proj.name == "Workspace Alpha"
         assert proj.profile_name == "development"
 
@@ -125,7 +131,9 @@ def test_model_catalog_and_cost_estimation(runtime_ctx: RuntimeContext) -> None:
     assert any("claude" in m.model_id.lower() for m in search_results)
 
     # Cost estimation: 1,000,000 input tokens at $2.50 + 1,000,000 output at $10.00 = $12.50
-    cost = mcm.estimate_cost(provider="openai", model_id="gpt-4o", input_tokens=1_000_000, output_tokens=1_000_000)
+    cost = mcm.estimate_cost(
+        provider="openai", model_id="gpt-4o", input_tokens=1_000_000, output_tokens=1_000_000
+    )
     assert cost == 12.50
 
 
@@ -176,7 +184,9 @@ def test_encrypted_backup_and_tamper_detection(runtime_ctx: RuntimeContext) -> N
         assert backup_file.exists()
 
         # 1. Successful restore
-        report = bm.restore_backup(backup_file, password="StrongMasterPassword123!", overwrite_existing=True)
+        report = bm.restore_backup(
+            backup_file, password="StrongMasterPassword123!", overwrite_existing=True
+        )
         assert report.credentials_restored >= 1
 
         # 2. Wrong password -> SecurityError
