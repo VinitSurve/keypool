@@ -14,6 +14,7 @@ from keypool.storage.models import (
     AlertRuleRecord,
     Base,
     CatalogModelRecord,
+    DeviceRecord,
     ModelAliasRecord,
     ProfileRecord,
     SchemaMigrationRecord,
@@ -236,6 +237,28 @@ def _migration_v3(session: Session) -> None:
             )
 
 
+def _migration_v4(session: Session) -> None:
+    """Schema v4: multi-device synchronization and device registry."""
+    # Seed current local device if none exists
+    now = utc_now_iso()
+    count = session.execute(select(DeviceRecord)).scalars().first()
+    if count is None:
+        import platform
+
+        hostname = platform.node() or "local-mac"
+        session.add(
+            DeviceRecord(
+                id="dev_current_host",
+                name=f"{hostname} (Primary)",
+                device_fingerprint="primary_local_device",
+                is_current_device=True,
+                is_revoked=False,
+                registered_at=now,
+                last_synced_at=None,
+            )
+        )
+
+
 MIGRATIONS: list[tuple[int, str, MigrationCallable]] = [
     (1, "Initial schema: credentials, profiles, health, models, and usage tables", _migration_v1),
     (
@@ -247,6 +270,11 @@ MIGRATIONS: list[tuple[int, str, MigrationCallable]] = [
         3,
         "Schema v3: model routing aliases, automated alert rules, and notification events",
         _migration_v3,
+    ),
+    (
+        4,
+        "Schema v4: multi-device synchronization, device registry, and audit logging",
+        _migration_v4,
     ),
 ]
 

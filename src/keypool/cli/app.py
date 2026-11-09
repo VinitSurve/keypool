@@ -43,6 +43,7 @@ from keypool.cli.commands.profiles import (
 from keypool.cli.commands.projects import projects_app
 from keypool.cli.commands.providers import providers_index, providers_inspect, providers_show
 from keypool.cli.commands.requests import requests_app
+from keypool.cli.commands.sync import sync_app
 from keypool.cli.commands.usage import cmd_usage
 from keypool.cli.formatting import (
     RuntimeContext,
@@ -210,6 +211,7 @@ app.add_typer(gateway_app, name="gateway")
 app.add_typer(alerts_app, name="alerts")
 app.add_typer(alerts_app, name="alert")
 app.add_typer(benchmark_app, name="benchmark")
+app.add_typer(sync_app, name="sync")
 
 app.command("restore")(handle_cli_errors(cmd_restore))
 app.command("mcp")(handle_cli_errors(cmd_mcp))

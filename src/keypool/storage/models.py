@@ -363,3 +363,30 @@ class AlertEventRecord(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class DeviceRecord(Base):
+    """Enrolled multi-device synchronization clients."""
+
+    __tablename__ = "sync_devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    device_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_current_device: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    registered_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+    last_synced_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class SyncLogRecord(Base):
+    """Audit log of encrypted sync exports and imports across devices."""
+
+    __tablename__ = "sync_logs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    credentials_synced: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conflicts_resolved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timestamp: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
