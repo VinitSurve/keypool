@@ -145,3 +145,52 @@ def cmd_budget_check(
         console.print(
             "[bold green]All configured budgets are within acceptable limits.[/bold green]"
         )
+
+
+@budgets_app.command("forecast")
+def cmd_budget_forecast(
+    budget_id: str = typer.Argument(..., help="Budget ID to forecast spend for."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Project run-rate spend through the end of the budget period."""
+    ctx = RuntimeContext()
+    bm = BudgetManager(ctx.db)
+
+    try:
+        fc = bm.forecast_spend(budget_id)
+    except Exception as exc:
+        console = get_console(color_mode=ctx.settings.color)
+        console.print(f"[red]Error forecasting budget '{budget_id}': {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        emit_json("budget.forecast", fc)
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    grid = Table(show_header=False, box=None)
+    grid.add_column("Field", style="bold cyan", width=24)
+    grid.add_column("Value")
+
+    grid.add_row("Budget Name", f"[bold white]{fc['name']}[/bold white]")
+    grid.add_row("Period", fc["period"])
+    grid.add_row("Current Spend", f"${fc['current_spend']:.2f}")
+    grid.add_row("Amount Limit", f"${fc['amount_limit']:.2f}")
+    grid.add_row("Period Elapsed", f"{fc['fraction_elapsed'] * 100:.1f}%")
+    grid.add_row("Projected Spend", f"[bold]{fc['currency']} ${fc['projected_spend']:.2f}[/bold]")
+    grid.add_row("Projected Used", f"{fc['projected_percent_used']:.1f}%")
+    status_msg = (
+        "[bold red]PROJECTED TO EXCEED BUDGET LIMIT[/bold red]"
+        if fc["will_exceed"]
+        else "[bold green]Projected to remain within limit[/bold green]"
+    )
+    grid.add_row("Forecast Outlook", status_msg)
+
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold cyan]Budget Spend Forecast — {fc['name']}[/bold cyan]",
+            border_style="cyan" if not fc["will_exceed"] else "red",
+            box=box.ROUNDED,
+        )
+    )

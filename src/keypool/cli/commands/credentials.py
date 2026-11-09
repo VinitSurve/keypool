@@ -349,3 +349,215 @@ def cmd_remove(
     console.print(
         f"[bold green]✓[/bold green] Removed credential [bold cyan]{removed.id}[/bold cyan] ({removed.name}) from macOS Keychain and SQLite."
     )
+
+
+def cmd_rotate(
+    credential_id: str = typer.Argument(..., help="Credential ID whose API key will be rotated."),
+    new_key: str | None = typer.Option(
+        None,
+        "--key",
+        "-k",
+        help="Optional new API key (prompted securely if omitted).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip interactive confirmation.",
+    ),
+) -> None:
+    """Rotate the underlying secret in macOS Keychain for a credential."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    meta = ctx.credential_manager.get_credential(credential_id)
+    adapter = ctx.registry.get(meta.provider)
+
+    if not yes:
+        confirmed = confirm_destructive_action(
+            f"Rotate API key for '{meta.id}' ({meta.name}, provider={meta.provider})?",
+            default=False,
+        )
+        if not confirmed:
+            console.print("[yellow]Rotation cancelled.[/yellow]")
+            raise typer.Exit(int(ExitCode.SUCCESS))
+
+    secret = new_key.strip() if new_key else prompt_api_key(adapter.display_name)
+    updated = ctx.credential_manager.rotate_credential(meta.id, secret)
+    console.print(
+        f"[bold green]✓[/bold green] Credential [bold cyan]{updated.id}[/bold cyan] ({updated.name}) rotated successfully in macOS Keychain."
+    )
+
+
+def cmd_reminders(
+    days: int = typer.Option(7, "--days", "-d", help="Threshold in days to check for nearing expirations."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Inspect credential rotation reminders and nearing expirations."""
+    ctx = RuntimeContext()
+    reminders = ctx.credential_manager.check_rotation_reminders(threshold_days=days)
+
+    if json_output:
+        emit_json("reminders", {"count": len(reminders), "reminders": reminders})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    if not reminders:
+        console.print("[bold green]✓ All credentials are valid and within rotation policies.[/bold green]")
+        return
+
+    table = Table(title="[bold yellow]Credential Rotation & Expiry Reminders[/bold yellow]", box=box.ROUNDED)
+    table.add_column("Severity", style="bold")
+    table.add_column("ID", style="bold cyan")
+    table.add_column("Name", style="white")
+    table.add_column("Provider", style="cyan")
+    table.add_column("State", style="magenta")
+    table.add_column("Message")
+
+    for r in reminders:
+        sev_style = "red" if r["severity"] == "critical" else "yellow"
+        table.add_row(
+            f"[{sev_style}]{r['severity'].upper()}[/{sev_style}]",
+            r["credential_id"],
+            r["name"],
+            r["provider"],
+            r["state"],
+            r["message"],
+        )
+
+    console.print(table)
+
+
+def cmd_history(
+    credential_id: str = typer.Argument(..., help="Credential ID to inspect history for."),
+    limit: int = typer.Option(25, "--limit", "-l", help="Maximum historical entries to return."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """View complete audit history and event timeline for a credential."""
+    ctx = RuntimeContext()
+    meta = ctx.credential_manager.get_credential(credential_id)
+    history = ctx.credential_manager.get_credential_history(meta.id, limit=limit)
+
+    if json_output:
+        emit_json("history", {"credential_id": meta.id, "name": meta.name, "history": history})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    table = Table(
+        title=f"[bold cyan]Audit Timeline — {meta.name} ({meta.id})[/bold cyan]",
+        box=box.ROUNDED,
+    )
+    table.add_column("Timestamp", style="dim")
+    table.add_column("Type", style="cyan")
+    table.add_column("Status / State", style="bold")
+    table.add_column("Model", style="white")
+    table.add_column("Details")
+
+    for h in history:
+        t_type = h.get("type", "")
+        status_val = str(h.get("status") or h.get("state") or "")
+        model_val = str(h.get("model") or h.get("model_tested") or "-")
+        details = str(h.get("summary") or h.get("message") or "")
+        table.add_row(
+            format_timestamp(h.get("timestamp")),
+            t_type,
+            status_val,
+            model_val,
+            redact_text(details),
+        )
+
+    console.print(table)
+
+
+def cmd_bulk_enable(
+    credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to enable."),
+) -> None:
+    """Enable multiple credentials at once."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    updated = ctx.credential_manager.bulk_set_enabled(credential_ids, enabled=True)
+    console.print(f"[bold green]✓ Enabled {len(updated)} of {len(credential_ids)} credentials.[/bold green]")
+
+
+def cmd_bulk_disable(
+    credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to disable."),
+) -> None:
+    """Disable multiple credentials at once."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    updated = ctx.credential_manager.bulk_set_enabled(credential_ids, enabled=False)
+    console.print(f"[bold yellow]○ Disabled {len(updated)} of {len(credential_ids)} credentials.[/bold yellow]")
+
+
+def cmd_bulk_remove(
+    credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to permanently remove."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Permanently delete multiple credentials."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    if not yes:
+        confirmed = confirm_destructive_action(
+            f"Permanently delete {len(credential_ids)} credentials from macOS Keychain and SQLite?",
+            default=False,
+        )
+        if not confirmed:
+            console.print("[yellow]Bulk removal cancelled.[/yellow]")
+            raise typer.Exit(int(ExitCode.SUCCESS))
+
+    removed = ctx.credential_manager.bulk_remove_credentials(credential_ids)
+    console.print(f"[bold green]✓ Removed {len(removed)} credentials.[/bold green]")
+
+
+def cmd_bulk_tag(
+    credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to tag."),
+    tag: list[str] = typer.Option(..., "--tag", "-t", help="Tag(s) to assign."),
+) -> None:
+    """Assign tags to multiple credentials."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    updated = ctx.credential_manager.bulk_tag(credential_ids, tag)
+    console.print(f"[bold green]✓ Tagged {len(updated)} credentials with: {', '.join(tag)}[/bold green]")
+
+
+def cmd_export_keys(
+    output_path: str = typer.Option(..., "--output", "-o", help="File path to write encrypted bundle to."),
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Filter by provider."),
+    passphrase: str | None = typer.Option(None, "--passphrase", help="Bundle encryption passphrase."),
+) -> None:
+    """Export credentials securely into an AES-256-GCM encrypted file."""
+    import getpass
+    from pathlib import Path
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    pwd = passphrase or getpass.getpass("Enter bundle encryption passphrase: ")
+    if not pwd:
+        console.print("[red]Passphrase cannot be empty.[/red]")
+        raise typer.Exit(1)
+
+    bundle_bytes = ctx.credential_manager.export_credentials_bundle(pwd, provider=provider)
+    out_file = Path(output_path).expanduser().resolve()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_bytes(bundle_bytes)
+    out_file.chmod(0o600)
+    console.print(f"[bold green]✓ Successfully exported encrypted credential bundle to {out_file}[/bold green]")
+
+
+def cmd_import_keys(
+    input_path: str = typer.Argument(..., help="Path to encrypted credentials bundle file."),
+    passphrase: str | None = typer.Option(None, "--passphrase", help="Bundle decryption passphrase."),
+    allow_duplicate: bool = typer.Option(False, "--allow-duplicate", help="Allow importing duplicate API keys."),
+) -> None:
+    """Import credentials safely from an encrypted bundle file into macOS Keychain."""
+    import getpass
+    from pathlib import Path
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+    in_file = Path(input_path).expanduser().resolve()
+    if not in_file.exists():
+        console.print(f"[red]File '{in_file}' not found.[/red]")
+        raise typer.Exit(1)
+
+    pwd = passphrase or getpass.getpass("Enter bundle decryption passphrase: ")
+    bundle_bytes = in_file.read_bytes()
+    imported = ctx.credential_manager.import_credentials_bundle(bundle_bytes, pwd, allow_duplicate=allow_duplicate)
+    console.print(f"[bold green]✓ Successfully imported {len(imported)} credentials into macOS Keychain and SQLite.[/bold green]")

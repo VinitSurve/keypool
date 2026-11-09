@@ -7,7 +7,11 @@ from typing import Any
 import anyio
 
 from keypool.sdk.client import KeypoolClient
-from keypool.sdk.models import ChatCompletionResponse, ChatMessage, SelectedKey
+from keypool.sdk.models import (
+    ChatMessage,
+    EmbeddingResponse,
+    SelectedKey,
+)
 
 
 class AsyncCompletionsResource:
@@ -26,7 +30,7 @@ class AsyncCompletionsResource:
         temperature: float | None = None,
         max_tokens: int | None = None,
         **extra_kwargs: Any,
-    ) -> ChatCompletionResponse:
+    ) -> Any:
         """Asynchronously create a chat completion."""
         return await anyio.to_thread.run_sync(
             lambda: self._sync_client.chat.completions.create(
@@ -36,6 +40,31 @@ class AsyncCompletionsResource:
                 stream=stream,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                **extra_kwargs,
+            )
+        )
+
+
+class AsyncEmbeddingsResource:
+    """Async embeddings resource."""
+
+    def __init__(self, sync_client: KeypoolClient) -> None:
+        self._sync_client = sync_client
+
+    async def create(
+        self,
+        *,
+        input: str | list[str],
+        model: str = "text-embedding-3-small",
+        provider: str | None = None,
+        **extra_kwargs: Any,
+    ) -> EmbeddingResponse:
+        """Asynchronously create text embeddings."""
+        return await anyio.to_thread.run_sync(
+            lambda: self._sync_client.embeddings.create(
+                input=input,
+                model=model,
+                provider=provider,
                 **extra_kwargs,
             )
         )
@@ -65,6 +94,7 @@ class AsyncKeypoolClient:
             runtime_context=runtime_context,
         )
         self.chat = AsyncChatResource(self._sync)
+        self.embeddings = AsyncEmbeddingsResource(self._sync)
 
     async def __aenter__(self) -> AsyncKeypoolClient:
         return self

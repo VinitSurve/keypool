@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from keypool.config.settings import KeypoolSettings
+from keypool.core.budget_manager import BudgetManager
 from keypool.core.credential_manager import CredentialManager
 from keypool.core.exceptions import ExecutionError, InvalidArgumentError
 from keypool.core.selection_engine import SelectedCredential, SelectionEngine
@@ -118,6 +119,16 @@ class ExecutionManager:
         clean_profile = validate_profile_name(profile)
         adapter = self._registry.get(provider)
         effective_mode = env_mode or self._settings.execution.env_mode
+
+        # Check budget hard limits before proceeding
+        bm = BudgetManager(self._db)
+        blocked = bm.check_hard_limits(provider=adapter.name, profile=clean_profile)
+        if blocked:
+            b = blocked[0]
+            raise ExecutionError(
+                f"Execution blocked: budget hard limit exceeded for '{b.name}' (${b.current_spend:.2f} of ${b.amount_limit:.2f}).",
+                hint="Increase budget limit or review spend with 'keypool budget list'.",
+            )
 
         # 1. Validate executable exists before touching Keychain or updating usage
         _ = self.resolve_executable(command)

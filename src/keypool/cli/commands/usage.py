@@ -38,6 +38,11 @@ def cmd_usage(
         "--json",
         help="Output machine-readable JSON usage report.",
     ),
+    csv_output: bool = typer.Option(
+        False,
+        "--csv",
+        help="Output comma-separated CSV usage events.",
+    ),
 ) -> None:
     """Display locally observed credential selections, executions, 429 events, and token metrics."""
     ctx = RuntimeContext()
@@ -45,6 +50,30 @@ def cmd_usage(
         _ = ctx.registry.get(provider)
     if credential:
         _ = ctx.credential_manager.get_credential(credential)
+
+    if csv_output:
+        import csv
+        import io
+        import sys
+        events = ctx.usage_tracker.list_events(provider=provider, credential_id=credential, limit=500)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "occurred_at", "provider", "credential_id", "model", "event_type", "status", "http_status", "duration_ms", "cost_usd"])
+        for ev in events:
+            writer.writerow([
+                ev.id,
+                ev.occurred_at,
+                ev.provider,
+                ev.credential_id or "",
+                ev.model or "",
+                ev.event_type,
+                ev.status,
+                ev.http_status or "",
+                f"{ev.duration_ms:.2f}" if ev.duration_ms is not None else "",
+                f"{ev.cost_usd:.6f}" if ev.cost_usd is not None else "",
+            ])
+        sys.stdout.write(output.getvalue())
+        return
 
     report = ctx.usage_tracker.get_usage_report(
         provider=provider,

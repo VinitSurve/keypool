@@ -90,6 +90,54 @@ MCP_TOOLS = [
         "description": "Run diagnostic checks on macOS Keychain, SQLite, PATH, and permissions.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "list_profiles",
+        "description": "List configured execution profiles and assigned credentials.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_projects",
+        "description": "List discovered project contexts and configured model aliases.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_gateway_status",
+        "description": "Inspect local AI gateway configuration, host, port, and health.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "compare_models",
+        "description": "Compare specifications, context limits, and token pricing between two models.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "model_a": {"type": "string", "description": "First model ID"},
+                "model_b": {"type": "string", "description": "Second model ID"},
+                "provider_a": {"type": "string", "description": "Optional provider for model_a"},
+                "provider_b": {"type": "string", "description": "Optional provider for model_b"},
+            },
+            "required": ["model_a", "model_b"],
+        },
+    },
+    {
+        "name": "list_alerts",
+        "description": "List active system alert rules and recent notification events.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "check_rotation_reminders",
+        "description": "Check for credentials that have expired or are due for API key rotation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Warning threshold in days (default: 7)",
+                    "default": 7,
+                }
+            },
+        },
+    },
 ]
 
 
@@ -229,6 +277,55 @@ class MCPServer:
         if name == "run_doctor":
             summary = build_status_summary(self.ctx)
             return json.dumps(redact_data(summary), indent=2)
+
+        if name == "list_profiles":
+            profiles = self.ctx.profile_manager.list_profiles()
+            return json.dumps([p.model_dump() for p in profiles], indent=2)
+
+        if name == "list_projects":
+            from keypool.core.project_manager import ProjectManager
+
+            pm = ProjectManager(self.ctx.db)
+            projects = pm.list_projects()
+            return json.dumps([p.model_dump() for p in projects], indent=2)
+
+        if name == "get_gateway_status":
+            gw_cfg = self.ctx.settings.gateway
+            creds = self.ctx.credential_manager.list_credentials()
+            return json.dumps(
+                {
+                    "host": gw_cfg.host,
+                    "port": gw_cfg.port,
+                    "default_strategy": gw_cfg.default_strategy,
+                    "max_fallback_attempts": gw_cfg.max_fallback_attempts,
+                    "configured_credentials": len(creds),
+                    "enabled_credentials": len([c for c in creds if c.enabled]),
+                },
+                indent=2,
+            )
+
+        if name == "compare_models":
+            mcm = ModelCatalogManager(self.ctx.db)
+            cmp_res = mcm.compare_models(
+                model_a=args["model_a"],
+                model_b=args["model_b"],
+                provider_a=args.get("provider_a"),
+                provider_b=args.get("provider_b"),
+            )
+            return json.dumps(cmp_res, indent=2)
+
+        if name == "list_alerts":
+            from keypool.notifications.alerts import AlertManager
+
+            am = AlertManager(self.ctx)
+            rules = am.list_rules()
+            events = am.list_alerts(limit=20)
+            return json.dumps({"rules": rules, "recent_events": events}, indent=2)
+
+        if name == "check_rotation_reminders":
+            days = int(args.get("days", 7))
+            reminders = self.ctx.credential_manager.check_rotation_reminders(threshold_days=days)
+            return json.dumps(reminders, indent=2)
 
         return json.dumps({"error": f"Unknown tool '{name}'"})
 

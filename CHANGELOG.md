@@ -5,6 +5,43 @@ All notable changes to **KEYPOOL** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-11-10
+
+### Added
+- **Universal Provider Ecosystem (v5.0):**
+  - Added enterprise cloud specialized provider adapters: Microsoft Azure OpenAI (`azure_openai`), Amazon Bedrock (`bedrock`), Google Cloud Vertex AI (`vertex`), IBM watsonx.ai (`watsonx`).
+  - Broadened full provider catalog to 43+ leading AI providers and local runtimes (OpenAI, Anthropic, Gemini, Groq, Cohere, Replicate, Mistral, Together, DeepSeek, Cerebras, Ollama, LM Studio, vLLM, llama.cpp, LocalAI, etc.).
+  - Generic OpenAI-compatible adapter framework with SSRF-safe URL validation.
+- **Advanced Credential Intelligence:**
+  - Bulk credential management operations (`bulk_add_credentials`, `bulk_remove_credentials`, `bulk_set_enabled`, `bulk_tag`, `bulk_untag`).
+  - Credential rotation reminders (`keypool reminders`, `check_rotation_reminders`) and audit history (`keypool history`).
+  - Encrypted credential bundle export/import (`export-keys`, `import-keys`) with AES-256-GCM.
+- **Deterministic 9-Strategy Selection Engine:**
+  - Full selection strategy implementation: `priority`, `round_robin`, `lru`, `health_first`, `latency`, `cost`, `random`, `weighted`, and `manual`.
+  - Cryptographically secure randomized weighted selection via `secrets.SystemRandom`.
+- **Model Catalog Discovery & Comparison:**
+  - Dynamic discovery and caching of provider model endpoints.
+  - Model comparison (`keypool models compare <model_a> <model_b>`, SDK `compare_models`) evaluating context windows, pricing, modalities, and streaming support.
+- **Budget Governance & Forecasting:**
+  - Model-scoped budgets supporting daily, weekly, and monthly periods.
+  - Linear regression spend forecasting (`keypool budget forecast`, `forecast_spend`).
+  - Hard limit budget enforcement directly blocking API calls in Local AI Gateway and CLI executions.
+  - CSV usage event export (`keypool usage --csv`).
+- **Developer SDK & MCP Server:**
+  - Full synchronous (`KeypoolClient`) and asynchronous (`AsyncKeypoolClient`) Python SDKs.
+  - Typed text embeddings API (`client.embeddings.create`, `async_client.embeddings.create`).
+  - SSE streaming chat completion chunks (`ChatCompletionChunk`).
+  - Complete MCP server exposing 9 safe tools (`list_credentials`, `test_credential`, `get_usage_summary`, `list_profiles`, `list_projects`, `get_gateway_status`, `compare_models`, `list_alerts`, `check_rotation_reminders`).
+- **Interactive 12-Tab Terminal User Interface (TUI):**
+  - 12 comprehensive Rich tabs: `overview`, `credentials`, `providers`, `health`, `models`, `profiles`, `projects`, `usage`, `budgets`, `gateway`, `settings`, `diagnostics`.
+  - Direct view jump flag: `keypool tui --view <tab>`.
+- **Native macOS Companion App:**
+  - SwiftUI MenuBar application (`macos/KeypoolCompanion`) with real-time status, one-click gateway toggle, and system notifications.
+- **Encrypted Multi-Device Sync:**
+  - Zero-cloud AES-256-GCM encrypted peer-to-peer export/import with PBKDF2 key derivation and replay protection.
+- **Comprehensive Documentation Suite:**
+  - Installation, Threat Model, Python SDK, MCP Guide, TUI Guide, macOS Guide, Sync Guide, Plugin Development, CI/CD Integration, and FAQ.
+
 ## [1.0.0] - 2026-11-09
 
 ### Added

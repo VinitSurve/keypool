@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from keypool.cli.formatting import RuntimeContext
+from keypool.core.budget_manager import BudgetManager
 from keypool.core.exceptions import (
     CredentialUnavailableError,
     KeypoolError,
@@ -75,6 +76,21 @@ class GatewayForwarder:
         target_profile = profile
         is_stream = bool(request_data.get("stream", False))
         max_attempts = self.ctx.settings.gateway.max_fallback_attempts
+
+        # Enforce budget hard limits
+        bm = BudgetManager(self.ctx.db)
+        blocked_budgets = bm.check_hard_limits(
+            provider=route.provider,
+            profile=target_profile,
+            project_id=project_id,
+            model=route.target_model,
+        )
+        if blocked_budgets:
+            b = blocked_budgets[0]
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Budget hard limit exceeded: '{b.name}' (${b.current_spend:.2f} of ${b.amount_limit:.2f})",
+            )
 
         try:
             candidates = self.ctx.selection_engine.get_ordered_candidates(
@@ -442,6 +458,20 @@ class GatewayForwarder:
     ) -> Any:
         """Execute embeddings forward request with failover across credentials."""
         target_profile = profile
+        # Enforce budget hard limits
+        bm = BudgetManager(self.ctx.db)
+        blocked_budgets = bm.check_hard_limits(
+            provider=route.provider,
+            profile=target_profile,
+            project_id=project_id,
+            model=route.target_model,
+        )
+        if blocked_budgets:
+            b = blocked_budgets[0]
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Budget hard limit exceeded: '{b.name}' (${b.current_spend:.2f} of ${b.amount_limit:.2f})",
+            )
         try:
             candidates = self.ctx.selection_engine.get_ordered_candidates(
                 provider=route.provider,

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import json
 import secrets
+from datetime import UTC
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 from keypool.core.exceptions import (
     CredentialNotFoundError,
     InvalidArgumentError,
     KeychainError,
+    SecurityError,
     StorageError,
 )
 from keypool.core.usage_tracker import UsageTracker
@@ -33,9 +36,11 @@ from keypool.storage.database import DatabaseManager
 from keypool.storage.keychain import SecretStore
 from keypool.storage.models import (
     CredentialRecord,
+    HealthObservationRecord,
     HealthState,
     ModelCacheRecord,
     ProfileAssignmentRecord,
+    UsageEventRecord,
     utc_now_iso,
 )
 
@@ -645,3 +650,271 @@ class CredentialManager:
                     rec.updated_at = now
 
         return report
+
+    def bulk_add_credentials(
+        self,
+        credentials: list[dict[str, Any]],
+        *,
+        allow_duplicate: bool = False,
+    ) -> list[CredentialMetadata]:
+        """Add multiple credentials in a single batch operation."""
+        results: list[CredentialMetadata] = []
+        for item in credentials:
+            meta = self.add_credential(
+                provider=item["provider"],
+                name=item["name"],
+                secret=item["secret"],
+                quota_domain=item.get("quota_domain"),
+                tags=item.get("tags"),
+                priority=int(item.get("priority", 100)),
+                description=item.get("description"),
+                expires_at=item.get("expires_at"),
+                rotation_interval_days=item.get("rotation_interval_days"),
+                allow_duplicate=allow_duplicate,
+            )
+            results.append(meta)
+        return results
+
+    def bulk_remove_credentials(self, credential_ids: list[str]) -> list[CredentialMetadata]:
+        """Delete multiple credentials from Keychain and SQLite."""
+        removed: list[CredentialMetadata] = []
+        for cid in credential_ids:
+            with contextlib.suppress(Exception):
+                removed.append(self.remove_credential(cid))
+        return removed
+
+    def bulk_set_enabled(
+        self, credential_ids: list[str], *, enabled: bool
+    ) -> list[CredentialMetadata]:
+        """Enable or disable multiple credentials."""
+        updated: list[CredentialMetadata] = []
+        for cid in credential_ids:
+            with contextlib.suppress(Exception):
+                updated.append(self.set_enabled(cid, enabled=enabled))
+        return updated
+
+    def bulk_tag(self, credential_ids: list[str], tags: list[str]) -> list[CredentialMetadata]:
+        """Apply tags to multiple credentials."""
+        updated: list[CredentialMetadata] = []
+        for cid in credential_ids:
+            with contextlib.suppress(Exception):
+                updated.append(self.tag_credential(cid, tags))
+        return updated
+
+    def bulk_untag(self, credential_ids: list[str], tags: list[str]) -> list[CredentialMetadata]:
+        """Remove tags from multiple credentials."""
+        updated: list[CredentialMetadata] = []
+        for cid in credential_ids:
+            with contextlib.suppress(Exception):
+                updated.append(self.untag_credential(cid, tags))
+        return updated
+
+    def check_rotation_reminders(self, threshold_days: int = 7) -> list[dict[str, Any]]:
+        """Identify credentials that are expired, expiring soon, or past rotation interval."""
+        reminders: list[dict[str, Any]] = []
+        now = datetime.datetime.now(UTC)
+        creds = self.list_credentials()
+
+        for c in creds:
+            if not c.enabled:
+                continue
+
+            # Check explicit expiration date
+            if c.expires_at:
+                try:
+                    exp_dt = datetime.datetime.fromisoformat(c.expires_at)
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=UTC)
+                    diff = exp_dt - now
+                    days_remaining = diff.total_seconds() / 86400.0
+
+                    if days_remaining <= 0:
+                        reminders.append(
+                            {
+                                "credential_id": c.id,
+                                "name": c.name,
+                                "provider": c.provider,
+                                "state": "expired",
+                                "severity": "critical",
+                                "days_remaining": round(days_remaining, 1),
+                                "message": f"Credential '{c.name}' expired on {c.expires_at}",
+                            }
+                        )
+                    elif days_remaining <= threshold_days:
+                        reminders.append(
+                            {
+                                "credential_id": c.id,
+                                "name": c.name,
+                                "provider": c.provider,
+                                "state": "expiring_soon",
+                                "severity": "warning",
+                                "days_remaining": round(days_remaining, 1),
+                                "message": f"Credential '{c.name}' expires in {days_remaining:.1f} days ({c.expires_at})",
+                            }
+                        )
+                except ValueError:
+                    pass
+
+            # Check rotation interval
+            if c.rotation_interval_days and c.last_rotated_at:
+                try:
+                    rot_dt = datetime.datetime.fromisoformat(c.last_rotated_at)
+                    if rot_dt.tzinfo is None:
+                        rot_dt = rot_dt.replace(tzinfo=UTC)
+                    age_days = (now - rot_dt).total_seconds() / 86400.0
+                    interval = float(c.rotation_interval_days)
+
+                    if age_days >= interval:
+                        reminders.append(
+                            {
+                                "credential_id": c.id,
+                                "name": c.name,
+                                "provider": c.provider,
+                                "state": "rotation_due",
+                                "severity": "warning",
+                                "days_overdue": round(age_days - interval, 1),
+                                "message": f"Credential '{c.name}' has not been rotated for {age_days:.1f} days (rotation policy: every {c.rotation_interval_days} days)",
+                            }
+                        )
+                except ValueError:
+                    pass
+
+        return reminders
+
+    def get_credential_history(self, credential_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Retrieve historical audit timeline (executions, health checks, rotations) for a credential."""
+        clean_id = validate_credential_id(credential_id)
+        entries: list[dict[str, Any]] = []
+
+        with self._db.session_scope() as session:
+            # 1. Usage events
+            usage_rows = (
+                session.execute(
+                    select(UsageEventRecord)
+                    .where(UsageEventRecord.credential_id == clean_id)
+                    .order_by(desc(UsageEventRecord.occurred_at))
+                    .limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+            for u in usage_rows:
+                entries.append(
+                    {
+                        "type": "usage_event",
+                        "event_type": u.event_type,
+                        "status": u.status,
+                        "timestamp": u.occurred_at,
+                        "model": u.model,
+                        "cost_usd": u.cost_usd,
+                        "duration_ms": u.duration_ms,
+                        "summary": u.summary,
+                    }
+                )
+
+            # 2. Health observations
+            health_rows = (
+                session.execute(
+                    select(HealthObservationRecord)
+                    .where(HealthObservationRecord.credential_id == clean_id)
+                    .order_by(desc(HealthObservationRecord.observed_at))
+                    .limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+            for h in health_rows:
+                entries.append(
+                    {
+                        "type": "health_check",
+                        "state": h.state,
+                        "error_category": h.error_category,
+                        "http_status": h.http_status,
+                        "latency_ms": h.latency_ms,
+                        "timestamp": h.observed_at,
+                        "model_tested": h.model_tested,
+                        "message": h.sanitized_message,
+                    }
+                )
+
+        # Sort combined history chronologically descending
+        entries.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        return entries[:limit]
+
+    def export_credentials_bundle(
+        self,
+        passphrase: str,
+        provider: str | None = None,
+    ) -> bytes:
+        """Export credentials and their secrets in an AES-256-GCM encrypted binary bundle."""
+        from keypool.sync.protocol import encrypt_sync_payload
+
+        creds = self.list_credentials(provider=provider)
+        items: list[dict[str, Any]] = []
+
+        for c in creds:
+            with contextlib.suppress(Exception):
+                secret = self.retrieve_secret(c.id)
+                items.append(
+                    {
+                        "name": c.name,
+                        "provider": c.provider,
+                        "secret": secret,
+                        "quota_domain": c.quota_domain,
+                        "tags": c.tags,
+                        "priority": c.priority,
+                        "description": c.description,
+                        "expires_at": c.expires_at,
+                        "rotation_interval_days": c.rotation_interval_days,
+                    }
+                )
+
+        payload = {
+            "type": "keypool_credentials_bundle",
+            "version": 1,
+            "exported_at": utc_now_iso(),
+            "count": len(items),
+            "credentials": items,
+        }
+        return encrypt_sync_payload(payload, passphrase)
+
+    def import_credentials_bundle(
+        self,
+        bundle_bytes: bytes,
+        passphrase: str,
+        *,
+        allow_duplicate: bool = False,
+    ) -> list[CredentialMetadata]:
+        """Decrypt and import credentials from an encrypted bundle."""
+        from keypool.sync.protocol import decrypt_sync_payload
+
+        payload = decrypt_sync_payload(bundle_bytes, passphrase)
+        if payload.get("type") not in ("keypool_credentials_bundle", "keypool_sync_bundle"):
+            raise SecurityError("Unrecognized credential bundle format.")
+
+        creds_data = payload.get("credentials") or []
+        imported: list[CredentialMetadata] = []
+
+        for item in creds_data:
+            prov = item.get("provider")
+            name = item.get("name")
+            secret = item.get("secret")
+            if not prov or not name or not secret:
+                continue
+
+            with contextlib.suppress(Exception):
+                meta = self.add_credential(
+                    provider=prov,
+                    name=name,
+                    secret=secret,
+                    quota_domain=item.get("quota_domain"),
+                    tags=item.get("tags") or [],
+                    priority=int(item.get("priority", 100)),
+                    description=item.get("description"),
+                    expires_at=item.get("expires_at"),
+                    rotation_interval_days=item.get("rotation_interval_days"),
+                    allow_duplicate=allow_duplicate,
+                )
+                imported.append(meta)
+
+        return imported

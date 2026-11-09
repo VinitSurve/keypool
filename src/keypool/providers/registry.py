@@ -7,7 +7,9 @@ import httpx
 from keypool.config.settings import KeypoolSettings
 from keypool.core.exceptions import InvalidArgumentError
 from keypool.providers.anthropic import AnthropicProvider
+from keypool.providers.azure import AzureOpenAIProvider
 from keypool.providers.base import BaseProvider
+from keypool.providers.bedrock import AmazonBedrockProvider
 from keypool.providers.capabilities import (
     PROVIDER_CATALOG,
     AuthType,
@@ -21,6 +23,8 @@ from keypool.providers.gemini import GeminiProvider
 from keypool.providers.groq import GroqProvider
 from keypool.providers.openai_compatible import OpenAICompatibleProvider
 from keypool.providers.replicate import ReplicateProvider
+from keypool.providers.vertex import GoogleVertexProvider
+from keypool.providers.watsonx import WatsonXProvider
 from keypool.security.validation import validate_provider_name
 
 
@@ -85,6 +89,42 @@ class ProviderRegistry:
         )
         self.register(
             ReplicateProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            AzureOpenAIProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            AmazonBedrockProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            GoogleVertexProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            WatsonXProvider(
                 timeout_seconds=to,
                 connect_timeout_seconds=cto,
                 max_retries=mr,

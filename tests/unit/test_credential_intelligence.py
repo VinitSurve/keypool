@@ -201,3 +201,121 @@ def test_encrypted_backup_and_tamper_detection(runtime_ctx: RuntimeContext) -> N
 
         with pytest.raises(SecurityError):
             bm.restore_backup(corrupt_file, password="StrongMasterPassword123!")
+
+
+def test_bulk_credential_operations(runtime_ctx: RuntimeContext) -> None:
+    """Verify bulk adding, tagging, enabling, disabling, and removing credentials."""
+    cm = runtime_ctx.credential_manager
+
+    items = [
+        {"provider": "groq", "name": "Bulk Alpha", "secret": FAKE_GROQ_KEY_1, "tags": ["bulk"]},
+        {"provider": "groq", "name": "Bulk Beta", "secret": FAKE_GROQ_KEY_2, "tags": ["bulk"]},
+    ]
+    added = cm.bulk_add_credentials(items)
+    assert len(added) == 2
+    cids = [c.id for c in added]
+
+    # Bulk tag
+    tagged = cm.bulk_tag(cids, ["automated", "v5"])
+    assert len(tagged) == 2
+    assert "automated" in cm.get_credential(cids[0]).tags
+
+    # Bulk disable
+    disabled = cm.bulk_set_enabled(cids, enabled=False)
+    assert len(disabled) == 2
+    assert cm.get_credential(cids[0]).enabled is False
+
+    # Bulk enable
+    enabled = cm.bulk_set_enabled(cids, enabled=True)
+    assert len(enabled) == 2
+    assert cm.get_credential(cids[0]).enabled is True
+
+    # Bulk untag
+    untagged = cm.bulk_untag(cids, ["automated"])
+    assert len(untagged) == 2
+    assert "automated" not in cm.get_credential(cids[0]).tags
+
+    # Bulk remove
+    removed = cm.bulk_remove_credentials(cids)
+    assert len(removed) == 2
+    assert len(cm.list_credentials(provider="groq")) == 0
+
+
+def test_rotation_reminders_and_expiry(runtime_ctx: RuntimeContext) -> None:
+    """Verify rotation reminders detect expired and overdue credentials."""
+    cm = runtime_ctx.credential_manager
+
+    # 1. Expired credential
+    cm.add_credential(
+        provider="groq",
+        name="Expired Key",
+        secret=FAKE_GROQ_KEY_1,
+        expires_at="2020-01-01T00:00:00+00:00",
+    )
+
+    # 2. Key with rotation interval exceeded (30 days interval, but rotated 60 days ago)
+    c2 = cm.add_credential(
+        provider="groq",
+        name="Overdue Key",
+        secret=FAKE_GROQ_KEY_2,
+        rotation_interval_days=30,
+    )
+    with runtime_ctx.db.session_scope() as session:
+        from keypool.storage.models import CredentialRecord
+        rec = session.get(CredentialRecord, c2.id)
+        if rec:
+            rec.last_rotated_at = "2020-01-01T00:00:00+00:00"
+
+    reminders = cm.check_rotation_reminders(threshold_days=7)
+    assert len(reminders) >= 2
+    states = {r["state"] for r in reminders}
+    assert "expired" in states
+    assert "rotation_due" in states
+
+
+def test_credential_history(runtime_ctx: RuntimeContext) -> None:
+    """Verify retrieving chronological audit history for a credential."""
+    cm = runtime_ctx.credential_manager
+    ut = runtime_ctx.usage_tracker
+
+    c = cm.add_credential(provider="groq", name="History Key", secret=FAKE_GROQ_KEY_1)
+    ut.record_event(
+        provider="groq",
+        credential_id=c.id,
+        event_type="test_event_1",
+        status="success",
+        cost_usd=0.01,
+        summary="Test usage event 1",
+    )
+
+    history = cm.get_credential_history(c.id)
+    assert len(history) >= 1
+    assert any(h["summary"] == "Test usage event 1" for h in history)
+
+
+def test_direct_credentials_bundle_export_import(runtime_ctx: RuntimeContext) -> None:
+    """Verify direct AES-256-GCM encrypted credential bundle export and import."""
+    cm = runtime_ctx.credential_manager
+    c1 = cm.add_credential(
+        provider="groq",
+        name="Bundle Test Key",
+        secret=FAKE_GROQ_KEY_1,
+        tags=["exportable"],
+        priority=120,
+    )
+
+    # Export bundle
+    bundle_bytes = cm.export_credentials_bundle(passphrase="SecretBundlePassphrase!")
+    assert len(bundle_bytes) > 32
+
+    # Remove credential
+    cm.remove_credential(c1.id)
+    assert len(cm.list_credentials(provider="groq")) == 0
+
+    # Import bundle
+    imported = cm.import_credentials_bundle(bundle_bytes, passphrase="SecretBundlePassphrase!")
+    assert len(imported) == 1
+    assert imported[0].name == "Bundle Test Key"
+    assert cm.retrieve_secret(imported[0].id) == FAKE_GROQ_KEY_1
+    assert imported[0].priority == 120
+

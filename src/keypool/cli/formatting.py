@@ -201,6 +201,18 @@ def build_status_summary(ctx: RuntimeContext) -> dict[str, Any]:
     recent_activity = ctx.usage_tracker.get_recent_activity(limit=6)
     profiles = ctx.profile_manager.list_profiles()
 
+    cred_summary = {
+        "total": total,
+        "enabled": enabled_count,
+        "healthy": healthy_count,
+        "untested": untested_count,
+        "failing": failing_count,
+        "disabled": disabled_count,
+        "cooldown": sum(1 for c in creds if c.status == HealthState.RATE_LIMITED.value),
+        "auth_failed": sum(1 for c in creds if c.status == HealthState.AUTH_FAILED.value),
+        "keychain_error": sum(1 for c in creds if c.status == HealthState.KEYCHAIN_ERROR.value),
+    }
+
     return {
         "overview": {
             "total_credentials": total,
@@ -210,6 +222,7 @@ def build_status_summary(ctx: RuntimeContext) -> dict[str, Any]:
             "failing": failing_count,
             "disabled": disabled_count,
         },
+        "credentials": cred_summary,
         "providers": provider_counts,
         "active_profile": ctx.settings.default_profile,
         "profiles": [

@@ -180,6 +180,25 @@ class UsageTracker:
                 for row in rows
             ]
 
+    def list_events(
+        self,
+        *,
+        provider: str | None = None,
+        credential_id: str | None = None,
+        limit: int = 500,
+    ) -> list[UsageEventRecord]:
+        """Fetch raw usage event records for export or detailed auditing."""
+        norm_prov = provider.strip().lower() if provider else None
+        norm_cred = credential_id.strip() if credential_id else None
+        with self._db.session_scope() as session:
+            stmt = select(UsageEventRecord)
+            if norm_prov:
+                stmt = stmt.where(UsageEventRecord.provider == norm_prov)
+            if norm_cred:
+                stmt = stmt.where(UsageEventRecord.credential_id == norm_cred)
+            stmt = stmt.order_by(desc(UsageEventRecord.occurred_at), desc(UsageEventRecord.id)).limit(limit)
+            return list(session.execute(stmt).scalars().all())
+
     def get_usage_report(
         self,
         *,

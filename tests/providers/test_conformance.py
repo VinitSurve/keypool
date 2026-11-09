@@ -258,3 +258,129 @@ def test_custom_provider_ssrf_and_url_validation() -> None:
     headers = custom_adapter._build_headers("test-secret-key")
     assert headers["X-Custom-Org"] == "Engineering"
     assert headers["Authorization"] == "Bearer test-secret-key"
+
+
+def test_azure_openai_adapter_conformance() -> None:
+    """Verify Azure OpenAI provider adapter headers, models, completions, and error classification."""
+    from keypool.providers.azure import AzureOpenAIProvider
+
+    def azure_handler(request: httpx.Request) -> httpx.Response:
+        key = request.headers.get("api-key", "")
+        if key == "bad-key":
+            return httpx.Response(401, json={"error": {"code": "Unauthorized", "message": "Access denied"}})
+        if key == "rate-key":
+            return httpx.Response(429, headers={"retry-after": "25"}, json={"error": {"code": "QuotaExceeded", "message": "Rate limit exceeded"}})
+        if str(request.url).endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "gpt-4o-mini", "name": "GPT-4o Mini"}]})
+        if str(request.url).endswith("/chat/completions"):
+            return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}], "usage": {"total_tokens": 5}})
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(azure_handler))
+    adapter = AzureOpenAIProvider(http_client=client)
+
+    # 1. Success model discovery
+    disc = adapter.list_models("valid-azure-key")
+    assert disc.success is True
+    assert disc.models[0].id == "gpt-4o-mini"
+
+    # 2. Connection test with functional call
+    conn = adapter.test_connection("valid-azure-key", functional=True)
+    assert conn.success is True
+    assert conn.functional_ok is True
+    assert conn.observed_tokens == 5
+
+    # 3. 401 Auth error
+    bad_conn = adapter.test_connection("bad-key")
+    assert bad_conn.success is False
+    assert bad_conn.state == HealthState.AUTH_FAILED
+
+    # 4. 429 Rate limit
+    rate_conn = adapter.test_connection("rate-key")
+    assert rate_conn.success is False
+    assert rate_conn.state == HealthState.QUOTA_EXHAUSTED
+
+
+def test_bedrock_adapter_conformance() -> None:
+    """Verify Amazon Bedrock adapter foundation models, converse API, and error handling."""
+    from keypool.providers.bedrock import AmazonBedrockProvider
+
+    def bedrock_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "bad-key" in auth:
+            return httpx.Response(403, json={"__type": "AccessDeniedException", "message": "Invalid credentials"})
+        if "rate-key" in auth:
+            return httpx.Response(429, headers={"retry-after": "15"}, json={"__type": "ThrottlingException", "message": "Rate exceeded"})
+        if str(request.url).endswith("/foundation-models"):
+            return httpx.Response(200, json={"modelSummaries": [{"modelId": "anthropic.claude-3-haiku-20240307-v1:0", "modelName": "Claude 3 Haiku"}]})
+        if "/converse" in str(request.url):
+            return httpx.Response(200, json={"output": {"message": {"content": [{"text": "pong"}]}}, "usage": {"totalTokens": 4}})
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(bedrock_handler))
+    adapter = AmazonBedrockProvider(http_client=client)
+
+    disc = adapter.list_models("valid-bedrock-key")
+    assert disc.success is True
+    assert disc.models[0].id == "anthropic.claude-3-haiku-20240307-v1:0"
+
+    conn = adapter.test_connection("valid-bedrock-key", functional=True)
+    assert conn.success is True
+    assert conn.functional_ok is True
+
+    bad = adapter.test_connection("bad-key")
+    assert bad.success is False
+    assert bad.state in (HealthState.AUTH_FAILED, HealthState.PERMISSION_DENIED)
+
+
+def test_vertex_adapter_conformance() -> None:
+    """Verify Google Vertex AI adapter publisher models, generateContent, and errors."""
+    from keypool.providers.vertex import GoogleVertexProvider
+
+    def vertex_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "bad-key" in auth:
+            return httpx.Response(401, json={"error": {"status": "UNAUTHENTICATED", "message": "Invalid token"}})
+        if str(request.url).endswith("/publishers/google/models"):
+            return httpx.Response(200, json={"models": [{"name": "publishers/google/models/gemini-1.5-flash", "displayName": "Gemini 1.5 Flash"}]})
+        if ":generateContent" in str(request.url):
+            return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "pong"}]}}]})
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(vertex_handler))
+    adapter = GoogleVertexProvider(http_client=client)
+
+    disc = adapter.list_models("valid-vertex-key")
+    assert disc.success is True
+    assert disc.models[0].id == "gemini-1.5-flash"
+
+    conn = adapter.test_connection("valid-vertex-key", functional=True)
+    assert conn.success is True
+    assert conn.functional_ok is True
+
+
+def test_watsonx_adapter_conformance() -> None:
+    """Verify IBM watsonx.ai adapter models, chat endpoint, and errors."""
+    from keypool.providers.watsonx import WatsonXProvider
+
+    def watsonx_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "bad-key" in auth:
+            return httpx.Response(401, json={"errors": [{"code": "unauthorized", "message": "Token expired"}]})
+        if "/foundation_model_specs" in str(request.url):
+            return httpx.Response(200, json={"resources": [{"model_id": "ibm/granite-13b-chat-v2", "label": "Granite 13B"}]})
+        if "/ml/v1/text/chat" in str(request.url):
+            return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(watsonx_handler))
+    adapter = WatsonXProvider(http_client=client)
+
+    disc = adapter.list_models("valid-watsonx-key")
+    assert disc.success is True
+    assert disc.models[0].id == "ibm/granite-13b-chat-v2"
+
+    conn = adapter.test_connection("valid-watsonx-key", functional=True)
+    assert conn.success is True
+    assert conn.functional_ok is True
+

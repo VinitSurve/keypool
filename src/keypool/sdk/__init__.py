@@ -4,8 +4,12 @@ from keypool.sdk.async_client import AsyncKeypoolClient
 from keypool.sdk.client import KeypoolClient
 from keypool.sdk.models import (
     ChatCompletionChoice,
+    ChatCompletionChunk,
     ChatCompletionResponse,
     ChatMessage,
+    EmbeddingData,
+    EmbeddingResponse,
+    EmbeddingUsage,
     SelectedKey,
     UsageInfo,
 )
@@ -13,8 +17,12 @@ from keypool.sdk.models import (
 __all__ = [
     "AsyncKeypoolClient",
     "ChatCompletionChoice",
+    "ChatCompletionChunk",
     "ChatCompletionResponse",
     "ChatMessage",
+    "EmbeddingData",
+    "EmbeddingResponse",
+    "EmbeddingUsage",
     "KeypoolClient",
     "SelectedKey",
     "UsageInfo",

@@ -217,3 +217,33 @@ def test_cli_error_exit_codes(
 
     res_missing_prof = runner.invoke(app, ["profile", "show", "nonexistent_prof"])
     assert res_missing_prof.exit_code == int(ExitCode.CREDENTIAL_UNAVAILABLE)
+
+
+def test_cli_expanded_commands(
+    isolated_env: tuple[AppPaths, InMemorySecretStore],
+) -> None:
+    """Verify reminders, model comparison, budget forecasting, and TUI view flags."""
+    # 1. Reminders
+    res_rem = runner.invoke(app, ["reminders", "--json"])
+    assert res_rem.exit_code == 0
+    assert '"reminders"' in res_rem.stdout
+
+    # 2. Models Compare
+    res_cmp = runner.invoke(app, ["models", "compare", "gpt-4o", "gpt-4o-mini", "--json"])
+    assert res_cmp.exit_code == 0
+    assert '"context_comparison"' in res_cmp.stdout
+
+    # 3. Usage CSV
+    res_csv = runner.invoke(app, ["usage", "--csv"])
+    assert res_csv.exit_code == 0
+    assert "occurred_at" in res_csv.stdout
+
+    # 4. TUI view rendering
+    res_tui = runner.invoke(app, ["tui", "--view", "overview"])
+    assert res_tui.exit_code == 0
+    assert "KEYPOOL" in res_tui.stdout
+
+    res_tui_prov = runner.invoke(app, ["tui", "--view", "providers"])
+    assert res_tui_prov.exit_code == 0
+    assert "Registered Provider" in res_tui_prov.stdout
+

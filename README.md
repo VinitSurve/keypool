@@ -25,6 +25,23 @@
 
 ---
 
+## Complete Documentation Index
+
+- [Installation & Quick-Start Guide](docs/installation.md)
+- [Security Architecture & Threat Model](docs/threat_model.md)
+- [Python SDK Reference (Sync & Async)](docs/sdk_reference.md)
+- [Model Context Protocol (MCP) Guide](docs/mcp_guide.md)
+- [Interactive TUI User Guide](docs/tui_guide.md)
+- [macOS Companion App Guide](docs/macos_guide.md)
+- [Encrypted Multi-Device Synchronization Guide](docs/sync_guide.md)
+- [Plugin Architecture & Custom Provider Extension](docs/plugins.md)
+- [CI/CD Integration & Headless Automation Guide](docs/cicd.md)
+- [Frequently Asked Questions (FAQ)](docs/faq.md)
+- [Full CLI Reference](docs/commands.md)
+- [Provider Catalog & Adapters](docs/providers.md)
+
+---
+
 ## Security Architecture
 
 1. **Keychain-Only Secret Storage:** Real API keys reside exclusively in the macOS Keychain (`keyring.backends.macOS.Keyring`). Secrets are **never** stored in SQLite, config files, shell histories, or crash dumps. Plaintext fallback is strictly prohibited.

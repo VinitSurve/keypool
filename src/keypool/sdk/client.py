@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from keypool.cli.formatting import RuntimeContext
+from keypool.core.budget_manager import BudgetManager
 from keypool.core.exceptions import InvalidArgumentError, ProviderExecutionError
 from keypool.core.model_catalog import ModelCatalogManager
 from keypool.core.project_manager import ProjectManager
 from keypool.sdk.models import (
     ChatCompletionChoice,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionChunkDelta,
     ChatCompletionResponse,
     ChatMessage,
+    EmbeddingData,
+    EmbeddingResponse,
+    EmbeddingUsage,
     SelectedKey,
     UsageInfo,
 )
@@ -35,11 +45,26 @@ class CompletionsResource:
         temperature: float | None = None,
         max_tokens: int | None = None,
         **extra_kwargs: Any,
-    ) -> ChatCompletionResponse:
+    ) -> Any:
         """Create a chat completion using the optimal healthy credential for the provider."""
         resolved_provider, resolved_model = self._client._resolve_provider_and_model(
             provider, model
         )
+
+        # Enforce budget hard limits
+        bm = BudgetManager(self._client._runtime_ctx.db)
+        blocked = bm.check_hard_limits(
+            provider=resolved_provider,
+            profile=self._client.profile,
+            model=resolved_model,
+        )
+        if blocked:
+            b = blocked[0]
+            raise ProviderExecutionError(
+                f"Request blocked: budget hard limit exceeded for '{b.name}' (${b.current_spend:.2f} of ${b.amount_limit:.2f})",
+                hint="Adjust budget limits or review spend with 'keypool budget list'.",
+            )
+
         selected = self._client._runtime_ctx.selection_engine.select_credential(
             provider=resolved_provider,
             profile=self._client.profile,
@@ -68,6 +93,75 @@ class CompletionsResource:
         # Check adapter API type
         meta = self._client._runtime_ctx.registry.get_metadata(resolved_provider)
         api_type = meta.api_type.value if meta else "openai_compatible"
+
+        if stream:
+            # Synchronous SSE stream
+            import httpx
+
+            url = (
+                f"{adapter.base_url}/messages"
+                if api_type == "anthropic"
+                else (
+                    f"{adapter.base_url.rstrip('/')}/openai/chat/completions"
+                    if resolved_provider == "gemini"
+                    else (
+                        "https://api.cohere.com/compatibility/v1/chat/completions"
+                        if resolved_provider == "cohere"
+                        else f"{adapter.base_url.rstrip('/')}/chat/completions"
+                    )
+                )
+            )
+            payload["stream"] = True
+            client = httpx.Client(timeout=self._client.timeout)
+            req = client.build_request("POST", url, headers=headers, json=payload)
+            stream_resp = client.send(req, stream=True)
+            if stream_resp.status_code != 200:
+                stream_resp.read()
+                stream_resp.close()
+                client.close()
+                classification = adapter.classify_error(stream_resp)
+                raise ProviderExecutionError(
+                    f"{adapter.display_name} streaming call failed (HTTP {stream_resp.status_code}): {classification.sanitized_message}",
+                )
+
+            def stream_gen() -> Iterator[ChatCompletionChunk]:
+                try:
+                    for line in stream_resp.iter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data: "):
+                            raw_chunk = line[6:].strip()
+                            if raw_chunk == "[DONE]":
+                                break
+                            chunk_obj: ChatCompletionChunk | None = None
+                            with contextlib.suppress(Exception):
+                                chunk_json = json.loads(raw_chunk)
+                                choices: list[ChatCompletionChunkChoice] = []
+                                for rc in chunk_json.get("choices", []):
+                                    delta_data = rc.get("delta", {})
+                                    choices.append(
+                                        ChatCompletionChunkChoice(
+                                            index=rc.get("index", 0),
+                                            delta=ChatCompletionChunkDelta(
+                                                role=delta_data.get("role"),
+                                                content=delta_data.get("content"),
+                                            ),
+                                            finish_reason=rc.get("finish_reason"),
+                                        )
+                                    )
+                                chunk_obj = ChatCompletionChunk(
+                                    id=chunk_json.get("id") or f"chatcmpl_{int(time.time()*1000)}",
+                                    created=chunk_json.get("created") or int(time.time()),
+                                    model=resolved_model,
+                                    choices=choices,
+                                )
+                            if chunk_obj is not None:
+                                yield chunk_obj
+                finally:
+                    stream_resp.close()
+                    client.close()
+
+            return stream_gen()
 
         if api_type == "anthropic":
             endpoint = f"{adapter.base_url}/messages"
@@ -252,6 +346,134 @@ class HealthResource:
         }
 
 
+class EmbeddingsResource:
+    """Embeddings resource client."""
+
+    def __init__(self, client: KeypoolClient) -> None:
+        self._client = client
+
+    def create(
+        self,
+        *,
+        input: str | list[str],
+        model: str = "text-embedding-3-small",
+        provider: str | None = None,
+        **extra_kwargs: Any,
+    ) -> EmbeddingResponse:
+        """Generate text embeddings using the selected provider credential."""
+        resolved_provider, resolved_model = self._client._resolve_provider_and_model(
+            provider, model
+        )
+
+        # Enforce budget hard limits
+        bm = BudgetManager(self._client._runtime_ctx.db)
+        blocked = bm.check_hard_limits(
+            provider=resolved_provider,
+            profile=self._client.profile,
+            model=resolved_model,
+        )
+        if blocked:
+            b = blocked[0]
+            raise ProviderExecutionError(
+                f"Request blocked: budget hard limit exceeded for '{b.name}' (${b.current_spend:.2f} of ${b.amount_limit:.2f})",
+                hint="Adjust budget limits or review spend with 'keypool budget list'.",
+            )
+
+        selected = self._client._runtime_ctx.selection_engine.select_credential(
+            provider=resolved_provider,
+            profile=self._client.profile,
+            record_usage=True,
+        )
+        secret = self._client._runtime_ctx.credential_manager.retrieve_secret(selected.metadata.id)
+        adapter = self._client._runtime_ctx.registry.get(resolved_provider)
+
+        start_time = time.perf_counter()
+        headers = adapter._build_headers(secret)
+        payload: dict[str, Any] = {
+            "model": resolved_model,
+            "input": input,
+            **extra_kwargs,
+        }
+
+        if resolved_provider == "gemini":
+            endpoint = f"{adapter.base_url.rstrip('/')}/openai/embeddings"
+            headers["Authorization"] = f"Bearer {secret}"
+        elif resolved_provider == "cohere":
+            endpoint = "https://api.cohere.com/compatibility/v1/embeddings"
+            headers["Authorization"] = f"Bearer {secret}"
+        else:
+            endpoint = f"{adapter.base_url.rstrip('/')}/embeddings"
+
+        resp, exc, _ = adapter._request_with_retry(
+            "POST", endpoint, headers=headers, json_body=payload
+        )
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+        if exc is not None or resp is None or resp.status_code != 200:
+            classification = adapter.classify_error(resp, exc)
+            self._client._runtime_ctx.usage_tracker.record_event(
+                provider=resolved_provider,
+                credential_id=selected.metadata.id,
+                profile_name=self._client.profile,
+                event_type="sdk_embeddings",
+                status="failure",
+                http_status=resp.status_code if resp else None,
+                model=resolved_model,
+                duration_ms=duration_ms,
+                summary=f"SDK embeddings call failed: {classification.sanitized_message}",
+            )
+            raise ProviderExecutionError(
+                f"{adapter.display_name} embeddings failed (HTTP {resp.status_code if resp else 'N/A'}): {classification.sanitized_message}",
+                hint=f"Check provider status at {adapter.docs_url}.",
+            )
+
+        body = resp.json()
+        raw_data = body.get("data", [])
+        data_items = [
+            EmbeddingData(
+                index=d.get("index", idx),
+                embedding=d.get("embedding", []),
+                object=d.get("object", "embedding"),
+            )
+            for idx, d in enumerate(raw_data)
+        ]
+        u = body.get("usage", {})
+        prompt_t = int(u.get("prompt_tokens") or 0)
+        total_t = int(u.get("total_tokens") or prompt_t)
+
+        mcm = ModelCatalogManager(self._client._runtime_ctx.db)
+        cost_est = mcm.estimate_cost(
+            provider=resolved_provider,
+            model_id=resolved_model,
+            input_tokens=prompt_t,
+        )
+
+        self._client._runtime_ctx.usage_tracker.record_event(
+            provider=resolved_provider,
+            credential_id=selected.metadata.id,
+            profile_name=self._client.profile,
+            event_type="sdk_embeddings",
+            status="success",
+            http_status=200,
+            model=resolved_model,
+            observed_tokens=total_t,
+            cost_usd=cost_est,
+            duration_ms=duration_ms,
+            summary=f"SDK embeddings via {resolved_model} ({len(data_items)} vectors)",
+        )
+
+        return EmbeddingResponse(
+            object=body.get("object", "list"),
+            data=data_items,
+            model=resolved_model,
+            usage=EmbeddingUsage(
+                prompt_tokens=prompt_t,
+                total_tokens=total_t,
+                estimated_cost_usd=cost_est,
+            ),
+        )
+
+
 class KeypoolClient:
     """Unified client for executing AI requests across providers with intelligent credential routing."""
 
@@ -273,6 +495,7 @@ class KeypoolClient:
         )
 
         self.chat = ChatResource(self)
+        self.embeddings = EmbeddingsResource(self)
         self.models = ModelsResource(self)
         self.credentials = CredentialsResource(self)
         self.health = HealthResource(self)

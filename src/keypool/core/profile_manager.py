@@ -37,6 +37,7 @@ class ProfileDetails(BaseModel):
     description: str = ""
     is_builtin: bool = False
     preferred_provider: str | None = None
+    selection_strategy: str = "lru"
     created_at: str
     updated_at: str
     assigned_credential_ids: list[str] = Field(default_factory=list)
@@ -48,6 +49,7 @@ class ProfileDetails(BaseModel):
             "description": self.description,
             "is_builtin": self.is_builtin,
             "preferred_provider": self.preferred_provider,
+            "selection_strategy": self.selection_strategy,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "credential_count": len(self.assigned_credential_ids),
@@ -129,6 +131,7 @@ class ProfileManager:
                         description=prof.description or "",
                         is_builtin=prof.is_builtin,
                         preferred_provider=prof.preferred_provider,
+                        selection_strategy=prof.selection_strategy or "lru",
                         created_at=prof.created_at,
                         updated_at=prof.updated_at,
                         assigned_credential_ids=cids,

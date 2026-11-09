@@ -88,7 +88,7 @@ class BudgetManager:
         if amount_limit <= 0:
             raise InvalidArgumentError("Budget limit must be greater than zero.")
 
-        valid_scopes = ("global", "provider", "project", "profile")
+        valid_scopes = ("global", "provider", "project", "profile", "model")
         clean_scope = scope_type.strip().lower()
         if clean_scope not in valid_scopes:
             raise InvalidArgumentError(
@@ -162,6 +162,8 @@ class BudgetManager:
                 query = query.where(UsageEventRecord.profile_name == rec.scope_target)
             elif rec.scope_type == "project" and rec.scope_target:
                 query = query.where(UsageEventRecord.project_id == rec.scope_target)
+            elif rec.scope_type == "model" and rec.scope_target:
+                query = query.where(UsageEventRecord.model == rec.scope_target)
 
             total_spend = float(session.execute(query).scalar_one() or 0.0)
 
@@ -184,12 +186,51 @@ class BudgetManager:
                 hard_limit_enabled=rec.hard_limit_enabled,
             )
 
+    def forecast_spend(self, budget_id: str) -> dict[str, Any]:
+        """Project period-end spend based on current linear burn rate."""
+        status = self.evaluate_budget(budget_id)
+        now = datetime.now(UTC)
+
+        if status.period == "daily":
+            # Hours elapsed today / 24
+            fraction = max(0.04, (now.hour * 3600 + now.minute * 60 + now.second) / 86400.0)
+        elif status.period == "weekly":
+            # Days elapsed this week / 7
+            fraction = max(0.05, (now.weekday() * 86400 + now.hour * 3600 + now.minute * 60) / (7 * 86400.0))
+        else:
+            # Days elapsed in month / 30
+            day_of_month = now.day
+            fraction = max(0.03, day_of_month / 30.0)
+
+        fraction = min(1.0, fraction)
+        projected_spend = round(status.current_spend / fraction, 4)
+        projected_percent = (
+            round(projected_spend / status.amount_limit * 100.0, 1)
+            if status.amount_limit > 0
+            else 0.0
+        )
+        will_exceed = projected_spend >= status.amount_limit
+
+        return {
+            "budget_id": status.id,
+            "name": status.name,
+            "period": status.period,
+            "amount_limit": status.amount_limit,
+            "currency": status.currency,
+            "current_spend": round(status.current_spend, 4),
+            "fraction_elapsed": round(fraction, 3),
+            "projected_spend": projected_spend,
+            "projected_percent_used": projected_percent,
+            "will_exceed": will_exceed,
+        }
+
     def check_hard_limits(
         self,
         *,
         provider: str | None = None,
         profile: str | None = None,
         project_id: str | None = None,
+        model: str | None = None,
     ) -> list[BudgetStatus]:
         """Return list of any hard-limited budgets that are currently exceeded."""
         budgets = self.list_budgets()
@@ -201,7 +242,8 @@ class BudgetManager:
             matches_prov = b.scope_type == "provider" and provider and b.scope_target == provider
             matches_prof = b.scope_type == "profile" and profile and b.scope_target == profile
             matches_proj = b.scope_type == "project" and project_id and b.scope_target == project_id
-            if matches_global or matches_prov or matches_prof or matches_proj:
+            matches_model = b.scope_type == "model" and model and b.scope_target == model
+            if matches_global or matches_prov or matches_prof or matches_proj or matches_model:
                 blocked.append(b)
         return blocked
 

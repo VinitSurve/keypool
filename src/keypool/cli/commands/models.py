@@ -156,6 +156,103 @@ def cmd_models_inspect(
     )
 
 
+@models_app.command("compare")
+def cmd_models_compare(
+    model_a: str = typer.Argument(..., help="First model ID to compare."),
+    model_b: str = typer.Argument(..., help="Second model ID to compare."),
+    provider_a: str | None = typer.Option(None, "--provider-a", help="Provider for first model."),
+    provider_b: str | None = typer.Option(None, "--provider-b", help="Provider for second model."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Compare specifications, context limits, and pricing between two models."""
+    ctx = RuntimeContext()
+    mcm = ModelCatalogManager(ctx.db)
+
+    try:
+        res = mcm.compare_models(
+            model_a=model_a,
+            model_b=model_b,
+            provider_a=provider_a,
+            provider_b=provider_b,
+        )
+    except ValueError as exc:
+        console = get_console(color_mode=ctx.settings.color)
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        emit_json("models.compare", res)
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    table = Table(
+        title=f"[bold cyan]Model Comparison: {model_a} vs {model_b}[/bold cyan]",
+        box=box.ROUNDED,
+    )
+    table.add_column("Specification", style="bold cyan")
+    table.add_column(f"{model_a}", style="white")
+    table.add_column(f"{model_b}", style="white")
+
+    ma = res["model_a"]
+    mb = res["model_b"]
+
+    table.add_row("Provider", ma["provider"], mb["provider"])
+    table.add_row("Display Name", ma["display_name"], mb["display_name"])
+    table.add_row(
+        "Context Window",
+        f"{ma['context_window']:,} tokens" if ma["context_window"] else "-",
+        f"{mb['context_window']:,} tokens" if mb["context_window"] else "-",
+    )
+    table.add_row(
+        "Max Output",
+        f"{ma['max_output_tokens']:,} tokens" if ma["max_output_tokens"] else "-",
+        f"{mb['max_output_tokens']:,} tokens" if mb["max_output_tokens"] else "-",
+    )
+    table.add_row(
+        "Input Price / 1M",
+        f"${ma['input_price_per_1m']:.2f}" if ma["input_price_per_1m"] is not None else "-",
+        f"${mb['input_price_per_1m']:.2f}" if mb["input_price_per_1m"] is not None else "-",
+    )
+    table.add_row(
+        "Output Price / 1M",
+        f"${ma['output_price_per_1m']:.2f}" if ma["output_price_per_1m"] is not None else "-",
+        f"${mb['output_price_per_1m']:.2f}" if mb["output_price_per_1m"] is not None else "-",
+    )
+    table.add_row(
+        "Modalities",
+        ", ".join(ma["modalities"]),
+        ", ".join(mb["modalities"]),
+    )
+
+    console.print(table)
+
+
+@models_app.command("refresh")
+def cmd_models_refresh(
+    provider: str = typer.Argument(..., help="Provider whose models should be refreshed."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Discover live models from a provider using an active credential and update the local catalog."""
+    ctx = RuntimeContext()
+    console = get_console(color_mode=ctx.settings.color)
+
+    try:
+        selected = ctx.selection_engine.select_credential(provider=provider, record_usage=False)
+        secret = ctx.credential_manager.retrieve_secret(selected.metadata.id)
+    except Exception as exc:
+        console.print(f"[red]Unable to retrieve active credential for provider '{provider}': {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    mcm = ModelCatalogManager(ctx.db)
+    refreshed = mcm.refresh_provider_models(provider, secret, ctx.registry)
+
+    if json_output:
+        emit_json("models.refresh", {"provider": provider, "count": len(refreshed), "models": [m.to_public_dict() for m in refreshed]})
+        return
+
+    console.print(f"[bold green]✓ Refreshed {len(refreshed)} models for '{provider}' in local catalog.[/bold green]")
+
+
 alias_app = typer.Typer(
     name="alias",
     help="Manage model routing aliases (shortcuts mapping to provider/model endpoints).",

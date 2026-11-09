@@ -194,3 +194,100 @@ def test_backup_and_restore_includes_aliases(runtime_ctx: Any, tmp_path: Any) ->
     restored = alias_mgr.get_alias("ultra-fast")
     assert restored is not None
     assert restored["target"] == "groq/llama-3.1-8b-instant"
+
+
+def test_model_comparison_and_refresh(runtime_ctx: Any) -> None:
+    """Verify model comparison metrics and catalog refresh."""
+    from keypool.core.model_catalog import ModelCatalogManager
+
+    mcm = ModelCatalogManager(runtime_ctx.db)
+
+    # Compare gpt-4o vs gpt-4o-mini
+    cmp_res = mcm.compare_models(
+        model_a="gpt-4o",
+        model_b="gpt-4o-mini",
+        provider_a="openai",
+        provider_b="openai",
+    )
+    assert cmp_res["model_a"]["model_id"] == "gpt-4o"
+    assert cmp_res["model_b"]["model_id"] == "gpt-4o-mini"
+    assert cmp_res["pricing_comparison"]["cheaper_input_model"] == "gpt-4o-mini"
+    assert cmp_res["pricing_comparison"]["cost_ratio_a_to_b"] > 1.0
+
+
+def test_budget_forecasting_and_model_scopes(runtime_ctx: Any) -> None:
+    """Verify budget spend forecasting and model-scoped budgets."""
+    from keypool.core.budget_manager import BudgetManager
+
+    bm = BudgetManager(runtime_ctx.db)
+    ut = runtime_ctx.usage_tracker
+
+    # Create model-scoped budget
+    b = bm.set_budget(
+        name="Llama-3.1-Budget",
+        amount_limit=25.0,
+        scope_type="model",
+        scope_target="llama-3.1-8b-instant",
+        period="monthly",
+        hard_limit_enabled=True,
+    )
+    assert b.scope_type == "model"
+    assert b.scope_target == "llama-3.1-8b-instant"
+
+    # Record usage for this model
+    ut.record_event(
+        provider="groq",
+        model="llama-3.1-8b-instant",
+        event_type="completion",
+        cost_usd=5.00,
+    )
+
+    # Forecast
+    fc = bm.forecast_spend(b.id)
+    assert fc["current_spend"] == 5.00
+    assert fc["projected_spend"] >= 5.00
+    assert fc["name"] == "Llama-3.1-Budget"
+
+
+def test_execution_manager_blocks_on_exceeded_budget(runtime_ctx: Any) -> None:
+    """Verify ExecutionManager blocks execution when hard budget limit is exceeded."""
+    from keypool.core.budget_manager import BudgetManager
+    from keypool.core.exceptions import ExecutionError
+    from keypool.core.execution_manager import ExecutionManager
+
+    cm = runtime_ctx.credential_manager
+    sel = runtime_ctx.selection_engine
+    pm = runtime_ctx.profile_manager
+    bm = BudgetManager(runtime_ctx.db)
+    ut = runtime_ctx.usage_tracker
+
+    c = cm.add_credential(provider="groq", name="Exec Key", secret=FAKE_GROQ_KEY_1)
+    pm.assign_credential("testing", c.id)
+
+    # Set hard budget limit of $1.00 for groq
+    bm.set_budget(
+        name="Groq Hard Limit",
+        amount_limit=1.00,
+        scope_type="provider",
+        scope_target="groq",
+        hard_limit_enabled=True,
+    )
+
+    # Exceed limit
+    ut.record_event(provider="groq", event_type="exec", cost_usd=2.50)
+
+    em = ExecutionManager(
+        db=runtime_ctx.db,
+        credential_manager=cm,
+        selection_engine=sel,
+        provider_registry=runtime_ctx.registry,
+    )
+
+    with pytest.raises(ExecutionError) as exc_info:
+        em.execute(
+            provider="groq",
+            profile="testing",
+            command=["echo", "hello"],
+        )
+    assert "budget hard limit exceeded" in str(exc_info.value)
+

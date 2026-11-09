@@ -24,6 +24,7 @@ class CatalogModelInfo(BaseModel):
     modalities: list[str] = Field(default_factory=lambda: ["text"])
     input_price_per_1m: float | None = None
     output_price_per_1m: float | None = None
+    streaming_supported: bool = True
     is_deprecated: bool = False
     updated_at: str
 
@@ -37,6 +38,7 @@ class CatalogModelInfo(BaseModel):
             "modalities": list(self.modalities),
             "input_price_per_1m": self.input_price_per_1m,
             "output_price_per_1m": self.output_price_per_1m,
+            "streaming_supported": self.streaming_supported,
             "is_deprecated": self.is_deprecated,
             "updated_at": self.updated_at,
         }
@@ -177,3 +179,82 @@ class ModelCatalogManager:
         out_price = model_info.output_price_per_1m or model_info.input_price_per_1m
         out_cost = (output_tokens / 1_000_000.0) * out_price
         return round(inp_cost + out_cost, 6)
+
+    def compare_models(
+        self,
+        model_a: str,
+        model_b: str,
+        provider_a: str | None = None,
+        provider_b: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare specifications, context limits, and token pricing between two models."""
+        info_a: CatalogModelInfo | None = None
+        info_b: CatalogModelInfo | None = None
+
+        if provider_a:
+            info_a = self.get_model(provider_a, model_a)
+        if provider_b:
+            info_b = self.get_model(provider_b, model_b)
+
+        # Fallback to search if provider was omitted
+        if info_a is None:
+            found_a = self.search_models(model_a)
+            if found_a:
+                info_a = found_a[0]
+        if info_b is None:
+            found_b = self.search_models(model_b)
+            if found_b:
+                info_b = found_b[0]
+
+        if info_a is None:
+            raise ValueError(f"Model '{model_a}' could not be found in the catalog.")
+        if info_b is None:
+            raise ValueError(f"Model '{model_b}' could not be found in the catalog.")
+
+        # Price comparison
+        price_in_a = info_a.input_price_per_1m or 0.0
+        price_in_b = info_b.input_price_per_1m or 0.0
+        ratio = round(price_in_a / price_in_b, 2) if price_in_b > 0 else None
+
+        ctx_a = info_a.context_window or 0
+        ctx_b = info_b.context_window or 0
+
+        return {
+            "model_a": info_a.to_public_dict(),
+            "model_b": info_b.to_public_dict(),
+            "context_comparison": {
+                "model_a_tokens": ctx_a,
+                "model_b_tokens": ctx_b,
+                "larger_context_model": info_a.model_id if ctx_a >= ctx_b else info_b.model_id,
+                "difference_tokens": abs(ctx_a - ctx_b),
+            },
+            "pricing_comparison": {
+                "model_a_input_1m": price_in_a,
+                "model_b_input_1m": price_in_b,
+                "cheaper_input_model": info_a.model_id if price_in_a <= price_in_b else info_b.model_id,
+                "cost_ratio_a_to_b": ratio,
+            },
+        }
+
+    def refresh_provider_models(
+        self,
+        provider: str,
+        credential_secret: str,
+        registry: Any,
+    ) -> list[CatalogModelInfo]:
+        """Discover live models from a provider adapter and update the local database catalog."""
+        adapter = registry.get(provider)
+        disc = adapter.list_models(credential_secret)
+        if not disc.success or not disc.models:
+            return []
+
+        updated: list[CatalogModelInfo] = []
+        for m in disc.models:
+            cat_info = self.upsert_model(
+                provider=adapter.name,
+                model_id=m.id,
+                display_name=m.display_name or m.id,
+                modalities="text",
+            )
+            updated.append(cat_info)
+        return updated

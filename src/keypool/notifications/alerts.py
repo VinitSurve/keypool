@@ -141,6 +141,22 @@ class AlertManager:
                             }
                         )
 
+            # 4. Evaluate Rotation Reminders
+            if "credential_expiry" in enabled_types and c.rotation_interval_days and c.last_rotated_at:
+                with contextlib.suppress(Exception):
+                    rot_dt = datetime.datetime.fromisoformat(c.last_rotated_at.replace("Z", "+00:00"))
+                    now_dt = datetime.datetime.now(datetime.UTC)
+                    age_days = (now_dt - rot_dt).total_seconds() / 86400.0
+                    if age_days >= float(c.rotation_interval_days):
+                        triggered_alerts.append(
+                            {
+                                "rule_type": "credential_expiry",
+                                "severity": "warning",
+                                "title": f"Credential Rotation Overdue: {c.provider.capitalize()}",
+                                "message": f"Credential '{c.name}' [{c.id}] has not been rotated for {age_days:.1f} days",
+                            }
+                        )
+
         # Persist and dispatch notifications
         saved_alerts: list[dict[str, Any]] = []
         now = utc_now_iso()

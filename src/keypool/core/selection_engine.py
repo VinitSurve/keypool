@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+import secrets
 from collections.abc import Callable
 from enum import StrEnum
 from typing import TypeVar
@@ -50,10 +50,46 @@ class SelectionStrategy(StrEnum):
     LRU = "lru"
     ROUND_ROBIN = "round_robin"
     PRIORITY = "priority"
-    LATENCY_AWARE = "latency_aware"
+    HEALTH_FIRST = "health_first"
     HEALTH_WEIGHTED = "health_weighted"
+    LATENCY = "latency"
+    LATENCY_AWARE = "latency_aware"
+    COST = "cost"
     COST_OPTIMIZED = "cost_optimized"
     RANDOM = "random"
+    WEIGHTED = "weighted"
+    MANUAL = "manual"
+
+
+def parse_selection_strategy(val: SelectionStrategy | str | None) -> SelectionStrategy:
+    """Normalize and resolve strategy string or enum into a canonical SelectionStrategy."""
+    if val is None:
+        return SelectionStrategy.LRU
+    if isinstance(val, SelectionStrategy):
+        return val
+    cleaned = str(val).strip().lower().replace("-", "_")
+    if cleaned in ("health_first", "health_weighted", "health", "health-first"):
+        return SelectionStrategy.HEALTH_FIRST
+    if cleaned in ("latency", "latency_aware", "latency-aware"):
+        return SelectionStrategy.LATENCY
+    if cleaned in ("cost", "cost_optimized", "cost-optimized"):
+        return SelectionStrategy.COST
+    if cleaned in ("round_robin", "roundrobin", "rr", "round-robin"):
+        return SelectionStrategy.ROUND_ROBIN
+    if cleaned in ("priority", "prio"):
+        return SelectionStrategy.PRIORITY
+    if cleaned in ("random", "rand"):
+        return SelectionStrategy.RANDOM
+    if cleaned in ("weighted", "weight"):
+        return SelectionStrategy.WEIGHTED
+    if cleaned in ("manual", "pin", "pinned"):
+        return SelectionStrategy.MANUAL
+    if cleaned in ("lru", "least_recently_used", "least-recently-used"):
+        return SelectionStrategy.LRU
+    try:
+        return SelectionStrategy(cleaned)
+    except ValueError:
+        return SelectionStrategy.LRU
 
 
 class SelectedCredential(BaseModel):
@@ -101,9 +137,7 @@ class SelectionEngine:
         excluded_ids = exclude_ids or set()
         excluded_domains = set(exclude_quota_domains or set())
 
-        active_strategy = SelectionStrategy.LRU
-        if strategy is not None:
-            active_strategy = SelectionStrategy(str(strategy).strip().lower())
+        active_strategy = parse_selection_strategy(strategy)
 
         with self._db.session_scope() as session:
             priority_by_cred: dict[str, int] = {}
@@ -116,10 +150,7 @@ class SelectionEngine:
                         hint="Run 'keypool profile list' to view available profiles.",
                     )
                 if strategy is None and prof_rec.selection_strategy:
-                    try:
-                        active_strategy = SelectionStrategy(prof_rec.selection_strategy.lower())
-                    except ValueError:
-                        active_strategy = SelectionStrategy.LRU
+                    active_strategy = parse_selection_strategy(prof_rec.selection_strategy)
 
                 assign_rows = (
                     session.execute(
@@ -242,7 +273,7 @@ class SelectionEngine:
 
                 eligible.sort(key=_priority_sort)
 
-            elif active_strategy == SelectionStrategy.LATENCY_AWARE:
+            elif active_strategy in (SelectionStrategy.LATENCY, SelectionStrategy.LATENCY_AWARE):
                 # Fetch latest observed latency per credential
                 latest_latencies: dict[str, float] = {}
                 for m, _, _ in eligible:
@@ -270,7 +301,7 @@ class SelectionEngine:
 
                 eligible.sort(key=_latency_sort)
 
-            elif active_strategy == SelectionStrategy.HEALTH_WEIGHTED:
+            elif active_strategy in (SelectionStrategy.HEALTH_FIRST, SelectionStrategy.HEALTH_WEIGHTED):
                 # Healthy > Previously successful > Untested, then least recently used
                 def _health_sort(item: tuple[CredentialMetadata, int, str]) -> tuple[int, str]:
                     m, _, _ = item
@@ -283,7 +314,7 @@ class SelectionEngine:
 
                 eligible.sort(key=_health_sort)
 
-            elif active_strategy == SelectionStrategy.COST_OPTIMIZED:
+            elif active_strategy in (SelectionStrategy.COST, SelectionStrategy.COST_OPTIMIZED):
                 # Order by lowest observed usage/cost
                 usage_by_cred: dict[str, float] = {}
                 for m, _, _ in eligible:
@@ -318,10 +349,37 @@ class SelectionEngine:
 
             elif active_strategy == SelectionStrategy.RANDOM:
                 # Randomize within the top health tier
-                random.shuffle(eligible)
+                secrets.SystemRandom().shuffle(eligible)
                 eligible.sort(
                     key=lambda item: 0 if item[0].status == HealthState.HEALTHY.value else 1
                 )
+
+            elif active_strategy == SelectionStrategy.WEIGHTED:
+                # Weighted priority selection using exponential random sampling
+                def _weighted_sort(
+                    item: tuple[CredentialMetadata, int, str],
+                ) -> tuple[int, float]:
+                    m, _, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    w = max(1, m.priority)
+                    score = secrets.SystemRandom().random() ** (1.0 / float(w))
+                    return (tier, -score)
+
+                eligible.sort(key=_weighted_sort)
+
+            elif active_strategy == SelectionStrategy.MANUAL:
+                # Preserve manual profile assignment priority order, then alphabetical by ID
+                def _manual_sort(
+                    item: tuple[CredentialMetadata, int, str],
+                ) -> tuple[int, str]:
+                    m, p, _ = item
+                    return (p, m.id)
+
+                eligible.sort(key=_manual_sort)
 
             else:
                 # Default LRU strategy

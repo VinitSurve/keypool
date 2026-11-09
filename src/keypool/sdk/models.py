@@ -62,3 +62,65 @@ class SelectedKey(BaseModel):
     env_var_name: str
     profile: str | None = None
     selection_reason: str | None = None
+
+
+class EmbeddingData(BaseModel):
+    """Individual vector embedding."""
+
+    model_config = ConfigDict(extra="allow")
+
+    index: int = 0
+    embedding: list[float] = Field(default_factory=list)
+    object: str = "embedding"
+
+
+class EmbeddingUsage(BaseModel):
+    """Token usage for embeddings."""
+
+    model_config = ConfigDict(extra="allow")
+
+    prompt_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float | None = None
+
+
+class EmbeddingResponse(BaseModel):
+    """Normalized embeddings response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    object: str = "list"
+    data: list[EmbeddingData] = Field(default_factory=list)
+    model: str
+    usage: EmbeddingUsage = Field(default_factory=EmbeddingUsage)
+
+
+class ChatCompletionChunkDelta(BaseModel):
+    """Streaming chunk delta content."""
+
+    model_config = ConfigDict(extra="allow")
+
+    role: str | None = None
+    content: str | None = None
+
+
+class ChatCompletionChunkChoice(BaseModel):
+    """Streaming chunk choice."""
+
+    model_config = ConfigDict(extra="allow")
+
+    index: int = 0
+    delta: ChatCompletionChunkDelta = Field(default_factory=ChatCompletionChunkDelta)
+    finish_reason: str | None = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """OpenAI-compatible chat completion chunk for streaming."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: list[ChatCompletionChunkChoice] = Field(default_factory=list)

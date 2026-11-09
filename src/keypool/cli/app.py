@@ -16,11 +16,20 @@ from keypool.cli.commands.benchmark import benchmark_app
 from keypool.cli.commands.budgets import budgets_app
 from keypool.cli.commands.credentials import (
     cmd_add,
+    cmd_bulk_disable,
+    cmd_bulk_enable,
+    cmd_bulk_remove,
+    cmd_bulk_tag,
     cmd_disable,
     cmd_enable,
+    cmd_export_keys,
+    cmd_history,
+    cmd_import_keys,
     cmd_list,
+    cmd_reminders,
     cmd_remove,
     cmd_rename,
+    cmd_rotate,
     cmd_show,
     cmd_update,
 )
@@ -179,6 +188,15 @@ app.command("rename")(handle_cli_errors(cmd_rename))
 app.command("enable")(handle_cli_errors(cmd_enable))
 app.command("disable")(handle_cli_errors(cmd_disable))
 app.command("remove")(handle_cli_errors(cmd_remove))
+app.command("rotate")(handle_cli_errors(cmd_rotate))
+app.command("reminders")(handle_cli_errors(cmd_reminders))
+app.command("history")(handle_cli_errors(cmd_history))
+app.command("bulk-enable")(handle_cli_errors(cmd_bulk_enable))
+app.command("bulk-disable")(handle_cli_errors(cmd_bulk_disable))
+app.command("bulk-remove")(handle_cli_errors(cmd_bulk_remove))
+app.command("bulk-tag")(handle_cli_errors(cmd_bulk_tag))
+app.command("export-keys")(handle_cli_errors(cmd_export_keys))
+app.command("import-keys")(handle_cli_errors(cmd_import_keys))
 
 app.command("test")(handle_cli_errors(cmd_test))
 app.command("health")(handle_cli_errors(cmd_health))
@@ -218,11 +236,13 @@ app.command("mcp")(handle_cli_errors(cmd_mcp))
 app.command("completion")(handle_cli_errors(cmd_completion))
 
 
-def cmd_tui() -> None:
+def cmd_tui(
+    view: str | None = typer.Option(None, "--view", "-v", help="Initial TUI view (overview, credentials, providers, health, models, profiles, projects, usage, budgets, gateway, settings, diagnostics)."),
+) -> None:
     """Launch the interactive terminal interface."""
     from keypool.tui.app import run_tui
 
-    run_tui()
+    run_tui(view=view)
 
 
 app.command("tui")(handle_cli_errors(cmd_tui))
