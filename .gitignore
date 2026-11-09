@@ -54,3 +54,9 @@ htmlcov/
 *.log
 config.toml
 
+# Swift / SPM
+.build/
+Packages/
+*.xcodeproj
+*.xcworkspace
+
