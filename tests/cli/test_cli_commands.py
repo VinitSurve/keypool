@@ -32,7 +32,7 @@ def test_cli_root_help_version_and_empty_dashboard(
     """Verify `keypool`, `keypool --help`, `keypool --version`, and empty states."""
     res_ver = runner.invoke(app, ["--version"])
     assert res_ver.exit_code == 0
-    assert "keypool 1.0.0" in res_ver.stdout
+    assert "keypool 5.0.0" in res_ver.stdout
 
     res_help = runner.invoke(app, ["--help"])
     assert res_help.exit_code == 0

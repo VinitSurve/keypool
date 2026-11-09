@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import httpx
@@ -14,7 +15,7 @@ from keypool.gateway.auth import GatewayAuth
 from keypool.gateway.router import GatewayRouter
 
 
-def test_gateway_auth_token_generation_and_validation(runtime_ctx):
+def test_gateway_auth_token_generation_and_validation(runtime_ctx: Any) -> None:
     auth = GatewayAuth(runtime_ctx.paths)
     token = auth.get_or_create_token()
     assert token.startswith("kp_gw_")
@@ -27,7 +28,7 @@ def test_gateway_auth_token_generation_and_validation(runtime_ctx):
     assert auth.validate_token(token) is False
 
 
-def test_gateway_app_endpoints_and_auth(runtime_ctx):
+def test_gateway_app_endpoints_and_auth(runtime_ctx: Any) -> None:
     token = "test_secret_token"
     app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
     client = TestClient(app)
@@ -64,7 +65,7 @@ def test_gateway_app_endpoints_and_auth(runtime_ctx):
     assert "usage" in resp.json()
 
 
-def test_gateway_router_resolves_aliases_and_models(runtime_ctx):
+def test_gateway_router_resolves_aliases_and_models(runtime_ctx: Any) -> None:
     router = GatewayRouter(runtime_ctx)
 
     route_fast = router.resolve("fast")
@@ -83,7 +84,7 @@ def test_gateway_router_resolves_aliases_and_models(runtime_ctx):
 
 
 @pytest.mark.anyio
-async def test_chat_completions_forward_and_failover(runtime_ctx):
+async def test_chat_completions_forward_and_failover(runtime_ctx: Any) -> None:
     # Add two credentials for groq
     runtime_ctx.credential_manager.add_credential(
         provider="groq",
@@ -124,7 +125,7 @@ async def test_chat_completions_forward_and_failover(runtime_ctx):
     call_count = 0
     orig_post = httpx.AsyncClient.post
 
-    async def mock_post(client_self, url, *args, **kwargs):
+    async def mock_post(client_self: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
         if "api.groq.com" in str(url):
             call_count += 1
@@ -161,7 +162,7 @@ async def test_chat_completions_forward_and_failover(runtime_ctx):
     assert report.successful_executions >= 1
 
 
-def test_gateway_cli_commands(isolated_env):
+def test_gateway_cli_commands(isolated_env: Any) -> None:
     from typer.testing import CliRunner
 
     from keypool.cli.app import app

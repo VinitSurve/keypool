@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from tests.fixtures.provider_payloads import FAKE_GROQ_KEY_1
 from typer.testing import CliRunner
@@ -12,7 +15,7 @@ from keypool.sync.manager import SyncManager
 from keypool.sync.protocol import decrypt_sync_payload, encrypt_sync_payload
 
 
-def test_sync_cryptographic_primitives():
+def test_sync_cryptographic_primitives() -> None:
     test_payload = {"foo": "bar", "credentials": [1, 2, 3]}
     passphrase = "my-secure-sync-passphrase"
 
@@ -38,7 +41,7 @@ def test_sync_cryptographic_primitives():
         decrypt_sync_payload(b"NON_SYNC_DATA", passphrase)
 
 
-def test_device_enrollment_and_revocation(runtime_ctx):
+def test_device_enrollment_and_revocation(runtime_ctx: Any) -> None:
     mgr = SyncManager(runtime_ctx)
 
     # Initial device exists from migration
@@ -56,7 +59,9 @@ def test_device_enrollment_and_revocation(runtime_ctx):
     assert updated["is_revoked"] is True
 
 
-def test_sync_bundle_export_and_import_with_conflicts(runtime_ctx, isolated_env, tmp_path):
+def test_sync_bundle_export_and_import_with_conflicts(
+    runtime_ctx: Any, isolated_env: Any, tmp_path: Path
+) -> None:
     mgr = SyncManager(runtime_ctx)
 
     # Add credential
@@ -80,7 +85,7 @@ def test_sync_bundle_export_and_import_with_conflicts(runtime_ctx, isolated_env,
     assert res["conflicts_resolved"] == 1
 
 
-def test_cli_sync_commands(isolated_env, tmp_path):
+def test_cli_sync_commands(isolated_env: Any, tmp_path: Path) -> None:
     runner = CliRunner()
 
     # Status

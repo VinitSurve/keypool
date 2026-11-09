@@ -95,12 +95,14 @@ def test_openai_compatible_adapter_mock_lifecycle() -> None:
     disc_bad = adapter.list_models("sk-bad-key")
     assert disc_bad.success is False
     assert disc_bad.state == HealthState.AUTH_FAILED
+    assert disc_bad.classification is not None
     assert "Invalid API key" in disc_bad.classification.sanitized_message
 
     # 4. 429 Rate limit error classification
     disc_rate = adapter.list_models("sk-rate-key")
     assert disc_rate.success is False
     assert disc_rate.state == HealthState.RATE_LIMITED
+    assert disc_rate.classification is not None
     assert disc_rate.classification.retry_after_seconds == 12
 
 

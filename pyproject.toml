@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "keypool"
-version = "1.0.0"
-description = "Local-first, globally installed macOS CLI utility for managing multiple API credentials across AI providers."
+version = "5.0.0"
+description = "Universal AI credential management, local AI gateway, and developer infrastructure platform for macOS."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

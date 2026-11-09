@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,7 +16,7 @@ from keypool.notifications.alerts import AlertManager
 from keypool.storage.models import HealthState
 
 
-def test_model_alias_manager_lifecycle(runtime_ctx):
+def test_model_alias_manager_lifecycle(runtime_ctx: Any) -> None:
     mgr = ModelAliasManager(runtime_ctx.db)
 
     # Builtin aliases seeded by migration v3
@@ -40,7 +41,7 @@ def test_model_alias_manager_lifecycle(runtime_ctx):
     assert mgr.remove_alias("nonexistent") is False
 
 
-def test_alert_manager_evaluation_and_rules(runtime_ctx):
+def test_alert_manager_evaluation_and_rules(runtime_ctx: Any) -> None:
     mgr = AlertManager(runtime_ctx)
 
     # Rules exist
@@ -78,7 +79,7 @@ def test_alert_manager_evaluation_and_rules(runtime_ctx):
 
 
 @pytest.mark.anyio
-async def test_benchmark_engine_execution(runtime_ctx):
+async def test_benchmark_engine_execution(runtime_ctx: Any) -> None:
     engine = BenchmarkEngine(runtime_ctx)
 
     mock_chat_response = {
@@ -119,7 +120,7 @@ async def test_benchmark_engine_execution(runtime_ctx):
         assert table.row_count == 2
 
 
-def test_cli_advanced_intelligence_commands(isolated_env):
+def test_cli_advanced_intelligence_commands(isolated_env: Any) -> None:
     runner = CliRunner()
 
     # Model aliases CLI
