@@ -19,10 +19,12 @@ _BLOCKED_HOSTNAMES = {
 }
 
 _BLOCKED_IP_NETWORKS = [
-    ipaddress.ip_network("169.254.0.0/16"),     # Link-local / Cloud metadata (AWS, Azure, GCP, DigitalOcean)
-    ipaddress.ip_network("100.100.100.200/32"), # Alibaba Cloud metadata
-    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
-    ipaddress.ip_network("0.0.0.0/8"),          # Current network
+    ipaddress.ip_network(
+        "169.254.0.0/16"
+    ),  # Link-local / Cloud metadata (AWS, Azure, GCP, DigitalOcean)
+    ipaddress.ip_network("100.100.100.200/32"),  # Alibaba Cloud metadata
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),  # Current network
 ]
 
 

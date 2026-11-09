@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import secrets
 from typing import Any
 
@@ -38,6 +40,12 @@ from keypool.storage.models import (
 )
 
 
+def compute_secret_fingerprint(secret: str) -> str:
+    """Compute a deterministic, salted SHA-256 fingerprint of a raw secret for duplicate detection."""
+    cleaned = secret.strip()
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+
+
 class CredentialMetadata(BaseModel):
     """Non-secret metadata snapshot of a managed credential."""
 
@@ -68,6 +76,15 @@ class CredentialMetadata(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     masked_preview: str | None = None
 
+    # v2.0 fields
+    tags: list[str] = Field(default_factory=list)
+    priority: int = 100
+    description: str | None = None
+    expires_at: str | None = None
+    rotation_interval_days: int | None = None
+    last_rotated_at: str | None = None
+    secret_fingerprint: str | None = None
+
     @property
     def effective_status(self) -> str:
         if not self.enabled:
@@ -86,6 +103,12 @@ class CredentialMetadata(BaseModel):
             "status": self.effective_status,
             "raw_health_status": self.status,
             "profiles": list(self.profiles),
+            "tags": list(self.tags),
+            "priority": self.priority,
+            "description": self.description,
+            "expires_at": self.expires_at,
+            "rotation_interval_days": self.rotation_interval_days,
+            "last_rotated_at": self.last_rotated_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "last_used_at": self.last_used_at,
@@ -140,7 +163,20 @@ class CredentialManager:
         raise StorageError("Unable to allocate a unique credential ID.")
 
     @staticmethod
+    def _parse_tags(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        try:
+            val = json.loads(raw)
+            if isinstance(val, list):
+                return [str(item).strip() for item in val if str(item).strip()]
+        except Exception:  # noqa: S110
+            pass
+        return []
+
+    @classmethod
     def _record_to_metadata(
+        cls,
         rec: CredentialRecord,
         profiles: list[str],
         cached_models: list[str] | None = None,
@@ -173,6 +209,13 @@ class CredentialManager:
             cached_models=cached_models or [],
             warnings=warnings or [],
             masked_preview=masked_preview,
+            tags=cls._parse_tags(rec.tags),
+            priority=rec.priority,
+            description=rec.description,
+            expires_at=rec.expires_at,
+            rotation_interval_days=rec.rotation_interval_days,
+            last_rotated_at=rec.last_rotated_at,
+            secret_fingerprint=rec.secret_fingerprint,
         )
 
     def add_credential(
@@ -182,20 +225,43 @@ class CredentialManager:
         name: str,
         secret: str,
         quota_domain: str | None = None,
+        tags: list[str] | None = None,
+        priority: int = 100,
+        description: str | None = None,
+        expires_at: str | None = None,
+        rotation_interval_days: int | None = None,
+        allow_duplicate: bool = False,
     ) -> CredentialMetadata:
         """Add a new credential to macOS Keychain and register metadata in SQLite.
 
-        Rolls back the Keychain entry automatically if SQLite registration fails.
+        Includes duplicate key detection, format validation, and rollback on DB failure.
         """
         register_secret_for_redaction(secret)
         adapter = self._registry.get(provider)
         clean_name = validate_credential_name(name)
         clean_secret, warnings = validate_api_key_input(secret, provider=adapter.name)
         masked = mask_secret_display(clean_secret)
+        fingerprint = compute_secret_fingerprint(clean_secret)
+
+        # Duplicate key check
+        if not allow_duplicate:
+            with self._db.session_scope() as session:
+                existing = session.execute(
+                    select(CredentialRecord).where(
+                        CredentialRecord.provider == adapter.name,
+                        CredentialRecord.secret_fingerprint == fingerprint,
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    raise InvalidArgumentError(
+                        f"Duplicate credential detected: an existing key for {adapter.display_name} has the identical API key ('{existing.name}' [{existing.id}]).",
+                        hint="Specify --allow-duplicate to force adding a duplicate key.",
+                    )
 
         cred_id = self._generate_unique_id()
         keychain_ref = f"keypool:{cred_id}"
         now = utc_now_iso()
+        tags_json = json.dumps(sorted(list(set(tags or []))))
 
         # Phase 1: Write secret to macOS Keychain
         self._secret_store.set_secret(keychain_ref, clean_secret, allow_overwrite=False)
@@ -211,6 +277,13 @@ class CredentialManager:
                     enabled=True,
                     status=HealthState.UNTESTED.value,
                     quota_domain=quota_domain.strip() if quota_domain else None,
+                    tags=tags_json,
+                    priority=priority,
+                    description=description.strip() if description else None,
+                    expires_at=expires_at,
+                    rotation_interval_days=rotation_interval_days,
+                    last_rotated_at=now,
+                    secret_fingerprint=fingerprint,
                     created_at=now,
                     updated_at=now,
                 )
@@ -332,6 +405,76 @@ class CredentialManager:
                     rec.updated_at = utc_now_iso()
             raise
 
+    def tag_credential(self, credential_id: str, tags: list[str]) -> CredentialMetadata:
+        """Add tags to an existing credential."""
+        clean_id = validate_credential_id(credential_id)
+        now = utc_now_iso()
+        with self._db.session_scope() as session:
+            record = session.get(CredentialRecord, clean_id)
+            if record is None:
+                raise CredentialNotFoundError(f"Credential '{clean_id}' not found.")
+            current_tags = set(self._parse_tags(record.tags))
+            for t in tags:
+                if t.strip():
+                    current_tags.add(t.strip())
+            record.tags = json.dumps(sorted(list(current_tags)))
+            record.updated_at = now
+        return self.get_credential(clean_id)
+
+    def untag_credential(self, credential_id: str, tags: list[str]) -> CredentialMetadata:
+        """Remove tags from an existing credential."""
+        clean_id = validate_credential_id(credential_id)
+        now = utc_now_iso()
+        with self._db.session_scope() as session:
+            record = session.get(CredentialRecord, clean_id)
+            if record is None:
+                raise CredentialNotFoundError(f"Credential '{clean_id}' not found.")
+            current_tags = set(self._parse_tags(record.tags))
+            for t in tags:
+                current_tags.discard(t.strip())
+            record.tags = json.dumps(sorted(list(current_tags)))
+            record.updated_at = now
+        return self.get_credential(clean_id)
+
+    def rotate_credential(self, credential_id: str, new_secret: str) -> CredentialMetadata:
+        """Rotate the underlying secret for a credential safely."""
+        clean_id = validate_credential_id(credential_id)
+        with self._db.session_scope() as session:
+            record = session.get(CredentialRecord, clean_id)
+            if record is None:
+                raise CredentialNotFoundError(f"Credential '{clean_id}' not found.")
+            provider = record.provider
+            keychain_ref = record.keychain_reference
+
+        clean_secret, warnings = validate_api_key_input(new_secret, provider=provider)
+        fingerprint = compute_secret_fingerprint(clean_secret)
+        self._secret_store.replace_secret(keychain_ref, clean_secret)
+        now = utc_now_iso()
+
+        with self._db.session_scope() as session:
+            record = session.get(CredentialRecord, clean_id)
+            if record is not None:
+                record.status = HealthState.UNTESTED.value
+                record.secret_fingerprint = fingerprint
+                record.last_rotated_at = now
+                record.cooldown_until = None
+                record.cache_expires_at = None
+                record.last_error_category = None
+                record.last_http_status = None
+                record.last_error_message = None
+                record.updated_at = now
+
+        self._usage.record_event(
+            provider=provider,
+            credential_id=clean_id,
+            event_type="credential_rotated",
+            status="info",
+            summary=f"Credential {clean_id} API key rotated",
+        )
+        meta = self.get_credential(clean_id)
+        meta.warnings = warnings
+        return meta
+
     def rename_credential(self, credential_id: str, new_name: str) -> CredentialMetadata:
         """Rename a credential's friendly label."""
         clean_id = validate_credential_id(credential_id)
@@ -385,7 +528,10 @@ class CredentialManager:
             register_secret_for_redaction(new_secret)
             clean_secret, warnings = validate_api_key_input(new_secret, provider=provider)
             masked = mask_secret_display(clean_secret)
+            fingerprint = compute_secret_fingerprint(clean_secret)
             self._secret_store.replace_secret(keychain_ref, clean_secret)
+        else:
+            fingerprint = None
 
         now = utc_now_iso()
         with self._db.session_scope() as session:
@@ -396,6 +542,8 @@ class CredentialManager:
                 record.name = clean_name
             if new_secret is not None:
                 record.status = HealthState.UNTESTED.value
+                record.secret_fingerprint = fingerprint
+                record.last_rotated_at = now
                 record.cooldown_until = None
                 record.cache_expires_at = None
                 record.last_error_category = None

@@ -96,4 +96,3 @@ def verify_command_contains_no_secret(command: Sequence[str], secret_value: str)
             raise SecurityError(
                 "Refusing to execute command: secret value detected in command-line arguments."
             )
-

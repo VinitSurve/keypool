@@ -49,12 +49,20 @@ class OpenAICompatibleProvider(BaseProvider):
         meta = PROVIDER_CATALOG.get(self.name)
 
         self.display_name = display_name or (meta.display_name if meta else name.capitalize())
-        self.base_url = (base_url or (meta.base_url if meta else "http://127.0.0.1:8000/v1")).rstrip("/")
-        self.env_var_name = env_var_name or (meta.env_var_name if meta else f"{self.name.upper()}_API_KEY")
-        self.default_test_model = default_test_model or (meta.default_test_model if meta else "default")
+        self.base_url = (
+            base_url or (meta.base_url if meta else "http://127.0.0.1:8000/v1")
+        ).rstrip("/")
+        self.env_var_name = env_var_name or (
+            meta.env_var_name if meta else f"{self.name.upper()}_API_KEY"
+        )
+        self.default_test_model = default_test_model or (
+            meta.default_test_model if meta else "default"
+        )
         self.docs_url = meta.docs_url if meta else "https://platform.openai.com/docs/api-reference"
         self.models_docs_url = meta.models_docs_url or self.docs_url if meta else self.docs_url
-        self.rate_limits_docs_url = meta.rate_limits_docs_url or self.docs_url if meta else self.docs_url
+        self.rate_limits_docs_url = (
+            meta.rate_limits_docs_url or self.docs_url if meta else self.docs_url
+        )
 
         self.auth_header = auth_header
         self.auth_scheme = auth_scheme
@@ -168,7 +176,13 @@ class OpenAICompatibleProvider(BaseProvider):
         if status == 429:
             is_quota = any(
                 term in combined
-                for term in ("quota", "insufficient_quota", "credit", "balance", "exceeded your current quota")
+                for term in (
+                    "quota",
+                    "insufficient_quota",
+                    "credit",
+                    "balance",
+                    "exceeded your current quota",
+                )
             )
             return ProviderErrorClassification(
                 state=HealthState.QUOTA_EXHAUSTED if is_quota else HealthState.RATE_LIMITED,
@@ -300,7 +314,9 @@ class OpenAICompatibleProvider(BaseProvider):
             "max_tokens": 5,
         }
 
-        resp, exc, gen_latency_ms = self._request_with_retry("POST", gen_url, headers=headers, json_body=payload)
+        resp, exc, gen_latency_ms = self._request_with_retry(
+            "POST", gen_url, headers=headers, json_body=payload
+        )
         total_latency = round(discovery.latency_ms + gen_latency_ms, 2)
 
         if exc is not None or resp is None or resp.status_code != 200:

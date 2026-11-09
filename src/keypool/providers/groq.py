@@ -410,4 +410,3 @@ class GroqProvider(BaseProvider):
             classification=None,
             sanitized_message=f"Groq connection and generation verified on '{selected_model}'.",
         )
-

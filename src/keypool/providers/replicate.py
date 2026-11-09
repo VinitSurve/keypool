@@ -16,8 +16,16 @@ from keypool.security.redaction import redact_text, register_secret_for_redactio
 from keypool.storage.models import HealthState
 
 _FALLBACK_REPLICATE_MODELS = [
-    ModelInfo(id="meta/meta-llama-3-8b-instruct", display_name="Llama 3 8B Instruct", supports_generation=True),
-    ModelInfo(id="meta/meta-llama-3-70b-instruct", display_name="Llama 3 70B Instruct", supports_generation=True),
+    ModelInfo(
+        id="meta/meta-llama-3-8b-instruct",
+        display_name="Llama 3 8B Instruct",
+        supports_generation=True,
+    ),
+    ModelInfo(
+        id="meta/meta-llama-3-70b-instruct",
+        display_name="Llama 3 70B Instruct",
+        supports_generation=True,
+    ),
 ]
 
 
@@ -160,7 +168,9 @@ class ReplicateProvider(BaseProvider):
                         name = item.get("name")
                         if owner and name:
                             mid = f"{owner}/{name}"
-                            models.append(ModelInfo(id=mid, display_name=mid, supports_generation=True))
+                            models.append(
+                                ModelInfo(id=mid, display_name=mid, supports_generation=True)
+                            )
         except Exception:  # noqa: S110
             models = _FALLBACK_REPLICATE_MODELS
 

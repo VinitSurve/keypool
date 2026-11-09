@@ -9,6 +9,9 @@ from typing import Any, TypeVar
 
 import typer
 
+from keypool.cli.commands.analytics import analytics_app
+from keypool.cli.commands.backup import backup_app, cmd_restore
+from keypool.cli.commands.budgets import budgets_app
 from keypool.cli.commands.credentials import (
     cmd_add,
     cmd_disable,
@@ -22,6 +25,7 @@ from keypool.cli.commands.credentials import (
 from keypool.cli.commands.diagnostics import cmd_doctor
 from keypool.cli.commands.execution import cmd_exec, cmd_get
 from keypool.cli.commands.health import cmd_health, cmd_status, cmd_test
+from keypool.cli.commands.models import models_app
 from keypool.cli.commands.profiles import (
     profile_assign,
     profile_create,
@@ -30,6 +34,7 @@ from keypool.cli.commands.profiles import (
     profile_show,
     profile_unassign,
 )
+from keypool.cli.commands.projects import projects_app
 from keypool.cli.commands.providers import providers_index, providers_inspect, providers_show
 from keypool.cli.commands.usage import cmd_usage
 from keypool.cli.formatting import (
@@ -182,4 +187,23 @@ app.command("usage")(handle_cli_errors(cmd_usage))
 app.add_typer(providers_subapp, name="providers")
 app.add_typer(providers_subapp, name="provider")
 app.add_typer(profile_subapp, name="profile")
+app.add_typer(projects_app, name="project")
+app.add_typer(projects_app, name="projects")
+app.add_typer(models_app, name="models")
+app.add_typer(models_app, name="model")
+app.add_typer(budgets_app, name="budget")
+app.add_typer(budgets_app, name="budgets")
+app.add_typer(backup_app, name="backup")
+app.add_typer(analytics_app, name="analytics")
 
+app.command("restore")(handle_cli_errors(cmd_restore))
+
+
+def cmd_tui() -> None:
+    """Launch the interactive terminal interface."""
+    from keypool.tui.app import run_tui
+
+    run_tui()
+
+
+app.command("tui")(handle_cli_errors(cmd_tui))

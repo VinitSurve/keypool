@@ -25,7 +25,9 @@ def test_provider_registry_contains_all_catalog_providers() -> None:
     registered_names = set(registry.names())
 
     for catalog_name in PROVIDER_CATALOG:
-        assert catalog_name in registered_names, f"Catalog provider '{catalog_name}' missing from registry"
+        assert catalog_name in registered_names, (
+            f"Catalog provider '{catalog_name}' missing from registry"
+        )
         adapter = registry.get(catalog_name)
         assert adapter.name == catalog_name
         assert adapter.display_name
@@ -46,7 +48,9 @@ def test_openai_compatible_adapter_mock_lifecycle() -> None:
         url = str(request.url)
         auth = request.headers.get("Authorization", "")
         if "bad-key" in auth:
-            return httpx.Response(401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error"}})
+            return httpx.Response(
+                401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error"}}
+            )
         if "rate-key" in auth:
             return httpx.Response(
                 429,
@@ -54,7 +58,9 @@ def test_openai_compatible_adapter_mock_lifecycle() -> None:
                 json={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}},
             )
         if url.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": "gpt-4o", "name": "GPT-4o"}, {"id": "gpt-4o-mini"}]})
+            return httpx.Response(
+                200, json={"data": [{"id": "gpt-4o", "name": "GPT-4o"}, {"id": "gpt-4o-mini"}]}
+            )
         if url.endswith("/chat/completions"):
             return httpx.Response(
                 200,
@@ -105,15 +111,31 @@ def test_anthropic_adapter_mock_lifecycle() -> None:
         assert request.headers.get("anthropic-version") == "2023-06-01"
         key = request.headers.get("x-api-key", "")
         if key == "bad-key":
-            return httpx.Response(401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}})
+            return httpx.Response(
+                401,
+                json={
+                    "type": "error",
+                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                },
+            )
         if key == "rate-key":
             return httpx.Response(
                 429,
                 headers={"retry-after": "45"},
-                json={"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}},
+                json={
+                    "type": "error",
+                    "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"},
+                },
             )
         if str(request.url).endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": "claude-3-5-sonnet-latest", "display_name": "Claude 3.5 Sonnet"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "claude-3-5-sonnet-latest", "display_name": "Claude 3.5 Sonnet"}
+                    ]
+                },
+            )
         if str(request.url).endswith("/messages"):
             return httpx.Response(
                 200,
@@ -133,7 +155,9 @@ def test_anthropic_adapter_mock_lifecycle() -> None:
     assert any(m.id == "claude-3-5-sonnet-latest" for m in disc.models)
 
     # 2. Connection test with functional call
-    conn = adapter.test_connection("sk-ant-valid-key", functional=True, preferred_model="claude-3-5-sonnet-latest")
+    conn = adapter.test_connection(
+        "sk-ant-valid-key", functional=True, preferred_model="claude-3-5-sonnet-latest"
+    )
     assert conn.success is True
     assert conn.functional_ok is True
     assert conn.observed_tokens == 6
@@ -177,7 +201,9 @@ def test_replicate_adapter_mock_lifecycle() -> None:
         if "bad-key" in auth:
             return httpx.Response(401, json={"detail": "Invalid token"})
         if str(request.url).endswith("/models"):
-            return httpx.Response(200, json={"results": [{"owner": "meta", "name": "llama-3-8b-instruct"}]})
+            return httpx.Response(
+                200, json={"results": [{"owner": "meta", "name": "llama-3-8b-instruct"}]}
+            )
         return httpx.Response(404)
 
     client = httpx.Client(transport=httpx.MockTransport(replicate_handler))

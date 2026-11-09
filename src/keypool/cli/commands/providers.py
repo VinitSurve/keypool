@@ -97,7 +97,9 @@ def providers_index(
 
 @providers_app.command("show")
 def providers_show(
-    provider: str = typer.Argument(..., help="Provider identifier (e.g. 'openai', 'anthropic', 'groq', 'gemini')."),
+    provider: str = typer.Argument(
+        ..., help="Provider identifier (e.g. 'openai', 'anthropic', 'groq', 'gemini')."
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -165,7 +167,9 @@ def providers_show(
 @providers_app.command("inspect")
 def providers_inspect(
     provider: str = typer.Argument(..., help="Provider identifier to inspect."),
-    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON metadata."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output machine-readable JSON metadata."
+    ),
 ) -> None:
     """Inspect adapter details, endpoints, and capabilities (alias for show)."""
     providers_show(provider=provider, json_output=json_output)

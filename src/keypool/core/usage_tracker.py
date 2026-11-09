@@ -119,6 +119,10 @@ class UsageTracker:
         duration_ms: float | None = None,
         command_name: str | None = None,
         summary: str | None = None,
+        cost_usd: float | None = None,
+        project_id: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> None:
         """Record a sanitized local usage/activity event."""
         safe_summary = redact_text(summary) if summary else None
@@ -141,6 +145,10 @@ class UsageTracker:
                     command_name=safe_cmd,
                     summary=safe_summary,
                     occurred_at=utc_now_iso(),
+                    cost_usd=cost_usd,
+                    project_id=project_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                 )
             )
 

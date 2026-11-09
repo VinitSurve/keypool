@@ -165,4 +165,3 @@ def cmd_get(
             expand=False,
         )
     )
-

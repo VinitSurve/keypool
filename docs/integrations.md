@@ -12,9 +12,11 @@ Your Python application reads standard SDK environment variables (`GROQ_API_KEY`
 # app.py
 import os
 
+
 def main() -> None:
     groq_key = os.environ["GROQ_API_KEY"]
     print(f"Loaded Groq key from environment (length={len(groq_key)})")
+
 
 if __name__ == "__main__":
     main()

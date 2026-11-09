@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
+from enum import StrEnum
 from typing import TypeVar
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from keypool.core.credential_manager import CredentialManager, CredentialMetadata
 from keypool.core.exceptions import (
@@ -22,9 +24,11 @@ from keypool.security.validation import validate_profile_name
 from keypool.storage.database import DatabaseManager
 from keypool.storage.models import (
     CredentialRecord,
+    HealthObservationRecord,
     HealthState,
     ProfileAssignmentRecord,
     ProfileRecord,
+    UsageEventRecord,
     utc_now_iso,
 )
 
@@ -38,6 +42,18 @@ _NON_ELIGIBLE_STATES = frozenset(
         HealthState.DISABLED.value,
     }
 )
+
+
+class SelectionStrategy(StrEnum):
+    """Supported multi-key credential selection strategies (Section 7)."""
+
+    LRU = "lru"
+    ROUND_ROBIN = "round_robin"
+    PRIORITY = "priority"
+    LATENCY_AWARE = "latency_aware"
+    HEALTH_WEIGHTED = "health_weighted"
+    COST_OPTIMIZED = "cost_optimized"
+    RANDOM = "random"
 
 
 class SelectedCredential(BaseModel):
@@ -67,31 +83,27 @@ class SelectionEngine:
         self._registry = provider_registry
         self._health_manager = health_manager
         self._usage = usage_tracker or UsageTracker(db)
+        self._rr_counters: dict[str, int] = {}
 
     def get_ordered_candidates(
         self,
         *,
         provider: str,
         profile: str | None = None,
+        strategy: SelectionStrategy | str | None = None,
         exclude_ids: set[str] | None = None,
         exclude_quota_domains: set[str] | None = None,
     ) -> list[tuple[CredentialMetadata, int, str]]:
-        """Return ordered eligible candidate credentials with (metadata, priority, reason).
-
-        Enforces:
-        1. Provider validation.
-        2. Strict profile boundary when profile is specified (never crosses profiles).
-        3. Excludes disabled credentials.
-        4. Excludes known invalid authentication / permission denied / keychain error.
-        5. Excludes credentials under an active cooldown or excluded quota domain.
-        6. Prefers healthy / previously successful credentials.
-        7. Tie-breaks by Least-Recently-Used (last_used_at ascending, None first).
-        """
+        """Return ordered eligible candidate credentials with (metadata, priority, reason)."""
         adapter = self._registry.get(provider)
         norm_provider = adapter.name
         clean_profile = validate_profile_name(profile) if profile else None
         excluded_ids = exclude_ids or set()
         excluded_domains = set(exclude_quota_domains or set())
+
+        active_strategy = SelectionStrategy.LRU
+        if strategy is not None:
+            active_strategy = SelectionStrategy(str(strategy).strip().lower())
 
         with self._db.session_scope() as session:
             priority_by_cred: dict[str, int] = {}
@@ -103,6 +115,12 @@ class SelectionEngine:
                         f"Profile '{clean_profile}' does not exist.",
                         hint="Run 'keypool profile list' to view available profiles.",
                     )
+                if strategy is None and prof_rec.selection_strategy:
+                    try:
+                        active_strategy = SelectionStrategy(prof_rec.selection_strategy.lower())
+                    except ValueError:
+                        active_strategy = SelectionStrategy.LRU
+
                 assign_rows = (
                     session.execute(
                         select(ProfileAssignmentRecord).where(
@@ -135,17 +153,17 @@ class SelectionEngine:
                     hint=f"Add one using 'keypool add {norm_provider}'.",
                 )
 
-            # Identify any quota_domains currently in active cooldown across this provider
+            # Identify quota_domains in active cooldown
             for rec in all_provider_creds:
                 if (
                     rec.quota_domain
                     and rec.status
-                    in (HealthState.RATE_LIMITED.value, HealthState.QUOTA_Exhausted.value)
+                    in (HealthState.RATE_LIMITED.value, HealthState.QUOTA_EXHAUSTED.value)
                     and is_iso_timestamp_future(rec.cooldown_until)
                 ):
                     excluded_domains.add(rec.quota_domain)
 
-            # If profile is specified, filter strictly to assigned credentials for this provider
+            # Filter to profile if set
             if clean_profile is not None:
                 scoped_creds = [c for c in all_provider_creds if c.id in priority_by_cred]
                 if not scoped_creds:
@@ -157,7 +175,6 @@ class SelectionEngine:
             else:
                 scoped_creds = list(all_provider_creds)
 
-            # Track exclusion reasons for clear diagnostics if none remain eligible
             disabled_count = 0
             auth_failed_count = 0
             cooldown_count = 0
@@ -179,31 +196,17 @@ class SelectionEngine:
                     cooldown_count += 1
                     continue
 
-                meta = CredentialMetadata(
-                    id=rec.id,
-                    name=rec.name,
-                    provider=rec.provider,
-                    keychain_reference=rec.keychain_reference,
-                    enabled=rec.enabled,
-                    status=rec.status,
-                    quota_domain=rec.quota_domain,
+                meta = self._cred_manager._record_to_metadata(
+                    rec,
                     profiles=[clean_profile] if clean_profile else [],
-                    created_at=rec.created_at,
-                    updated_at=rec.updated_at,
-                    last_used_at=rec.last_used_at,
-                    last_tested_at=rec.last_tested_at,
-                    last_successful_at=rec.last_successful_at,
-                    last_failure_at=rec.last_failure_at,
-                    cooldown_until=rec.cooldown_until,
-                    cache_expires_at=rec.cache_expires_at,
                 )
-                prio = priority_by_cred.get(rec.id, 100)
-                reason = (
-                    "healthy+lru"
+                prio = priority_by_cred.get(rec.id, rec.priority)
+                reason = f"{active_strategy.value}:" + (
+                    "healthy"
                     if rec.status == HealthState.HEALTHY.value
-                    else "previously_successful+lru"
+                    else "previously_successful"
                     if rec.last_successful_at
-                    else "untested+lru"
+                    else "untested"
                 )
                 eligible.append((meta, prio, reason))
 
@@ -222,25 +225,119 @@ class SelectionEngine:
                     hint="Run 'keypool health' or 'keypool list' to inspect credential states.",
                 )
 
-            # Deterministic ordering:
-            # 1. Explicit profile assignment priority (ascending, default 100)
-            # 2. Health tier: HEALTHY (0) -> previously successful (1) -> UNTESTED/other (2)
-            # 3. Least-Recently-Used: never used ("") before older ISO timestamps
-            # 4. Creation timestamp & ID for total determinism
-            def _sort_key(
-                item: tuple[CredentialMetadata, int, str],
-            ) -> tuple[int, int, str, str, str]:
-                m, prio, _ = item
-                if m.status == HealthState.HEALTHY.value:
-                    health_tier = 0
-                elif m.last_successful_at is not None:
-                    health_tier = 1
-                else:
-                    health_tier = 2
-                lru_key = m.last_used_at or ""
-                return (prio, health_tier, lru_key, m.created_at, m.id)
+            # Strategy-based sorting
+            if active_strategy == SelectionStrategy.PRIORITY:
+                # Lower profile priority rank first, then higher credential priority weight, then health tier, then LRU
+                def _priority_sort(
+                    item: tuple[CredentialMetadata, int, str],
+                ) -> tuple[int, int, int, str]:
+                    m, p, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    prof_rank = p if clean_profile is not None else 0
+                    return (prof_rank, -m.priority, tier, m.last_used_at or "")
 
-            eligible.sort(key=_sort_key)
+                eligible.sort(key=_priority_sort)
+
+            elif active_strategy == SelectionStrategy.LATENCY_AWARE:
+                # Fetch latest observed latency per credential
+                latest_latencies: dict[str, float] = {}
+                for m, _, _ in eligible:
+                    latest_obs = session.execute(
+                        select(HealthObservationRecord.latency_ms)
+                        .where(
+                            HealthObservationRecord.credential_id == m.id,
+                            HealthObservationRecord.latency_ms.isnot(None),
+                        )
+                        .order_by(HealthObservationRecord.observed_at.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    latest_latencies[m.id] = latest_obs if latest_obs is not None else 99999.0
+
+                def _latency_sort(
+                    item: tuple[CredentialMetadata, int, str],
+                ) -> tuple[int, float, str]:
+                    m, _, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    return (tier, latest_latencies.get(m.id, 99999.0), m.last_used_at or "")
+
+                eligible.sort(key=_latency_sort)
+
+            elif active_strategy == SelectionStrategy.HEALTH_WEIGHTED:
+                # Healthy > Previously successful > Untested, then least recently used
+                def _health_sort(item: tuple[CredentialMetadata, int, str]) -> tuple[int, str]:
+                    m, _, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    return (tier, m.last_used_at or "")
+
+                eligible.sort(key=_health_sort)
+
+            elif active_strategy == SelectionStrategy.COST_OPTIMIZED:
+                # Order by lowest observed usage/cost
+                usage_by_cred: dict[str, float] = {}
+                for m, _, _ in eligible:
+                    total_cost = session.execute(
+                        select(func.coalesce(func.sum(UsageEventRecord.cost_usd), 0.0)).where(
+                            UsageEventRecord.credential_id == m.id
+                        )
+                    ).scalar_one()
+                    usage_by_cred[m.id] = float(total_cost or 0.0)
+
+                def _cost_sort(item: tuple[CredentialMetadata, int, str]) -> tuple[int, float, str]:
+                    m, _, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    return (tier, usage_by_cred.get(m.id, 0.0), m.last_used_at or "")
+
+                eligible.sort(key=_cost_sort)
+
+            elif active_strategy == SelectionStrategy.ROUND_ROBIN:
+                # Deterministic round-robin index rotation
+                key = f"{norm_provider}:{clean_profile or 'all'}"
+                idx = self._rr_counters.get(key, 0)
+                # Sort initially by ID for determinism, then rotate
+                eligible.sort(key=lambda item: item[0].id)
+                n = len(eligible)
+                rotated = [eligible[(idx + i) % n] for i in range(n)]
+                self._rr_counters[key] = (idx + 1) % n
+                return rotated
+
+            elif active_strategy == SelectionStrategy.RANDOM:
+                # Randomize within the top health tier
+                random.shuffle(eligible)
+                eligible.sort(
+                    key=lambda item: 0 if item[0].status == HealthState.HEALTHY.value else 1
+                )
+
+            else:
+                # Default LRU strategy
+                def _lru_sort(
+                    item: tuple[CredentialMetadata, int, str],
+                ) -> tuple[int, int, str, str, str]:
+                    m, prio, _ = item
+                    tier = (
+                        0
+                        if m.status == HealthState.HEALTHY.value
+                        else (1 if m.last_successful_at else 2)
+                    )
+                    return (prio, tier, m.last_used_at or "", m.created_at, m.id)
+
+                eligible.sort(key=_lru_sort)
+
             return eligible
 
     def select_credential(
@@ -248,18 +345,20 @@ class SelectionEngine:
         *,
         provider: str,
         profile: str | None = None,
+        strategy: SelectionStrategy | str | None = None,
         record_usage: bool = True,
         verify_keychain: bool = True,
     ) -> SelectedCredential:
         """Select the best eligible credential, verifying Keychain retrievability."""
         adapter = self._registry.get(provider)
-        candidates = self.get_ordered_candidates(provider=adapter.name, profile=profile)
+        candidates = self.get_ordered_candidates(
+            provider=adapter.name, profile=profile, strategy=strategy
+        )
 
         last_keychain_err: Exception | None = None
         for meta, _prio, reason in candidates:
             if verify_keychain:
                 try:
-                    # Verify secret is actually retrievable in Keychain
                     _ = self._cred_manager.retrieve_secret(meta.id)
                 except KeychainError as exc:
                     last_keychain_err = exc
@@ -315,6 +414,7 @@ class SelectionEngine:
         *,
         provider: str,
         profile: str | None = None,
+        strategy: SelectionStrategy | str | None = None,
         operation: Callable[[SelectedCredential, str], T],
         classify_failure: Callable[[Exception], ProviderErrorClassification | None],
         max_attempts: int = 3,
@@ -335,6 +435,7 @@ class SelectionEngine:
                 candidates = self.get_ordered_candidates(
                     provider=adapter.name,
                     profile=profile,
+                    strategy=strategy,
                     exclude_ids=tried_ids,
                     exclude_quota_domains=excluded_domains,
                 )
@@ -370,10 +471,9 @@ class SelectionEngine:
                 classification = classify_failure(op_exc)
                 if classification is not None and self._health_manager is not None:
                     self._health_manager.record_runtime_failure(meta.id, classification)
-                    # If credential belongs to a quota_domain and hit a 429/quota error,
-                    # do not blindly rotate to another key in the same quota_domain
                     if meta.quota_domain and classification.state in (
                         HealthState.RATE_LIMITED,
+                        HealthState.QUOTA_EXHAUSTED,
                         HealthState.QUOTA_Exhausted,
                     ):
                         excluded_domains.add(meta.quota_domain)

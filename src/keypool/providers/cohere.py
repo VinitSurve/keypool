@@ -238,7 +238,9 @@ class CohereProvider(BaseProvider):
             "messages": [{"role": "user", "content": "ping"}],
         }
 
-        resp, exc, gen_latency_ms = self._request_with_retry("POST", gen_url, headers=headers, json_body=payload)
+        resp, exc, gen_latency_ms = self._request_with_retry(
+            "POST", gen_url, headers=headers, json_body=payload
+        )
         total_latency = round(discovery.latency_ms + gen_latency_ms, 2)
 
         if exc is not None or resp is None or resp.status_code != 200:

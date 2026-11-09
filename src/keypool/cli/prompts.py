@@ -32,4 +32,3 @@ def prompt_api_key(provider_display: str) -> str:
 def confirm_destructive_action(prompt_text: str, *, default: bool = False) -> bool:
     """Request confirmation before replacing or deleting a credential or profile."""
     return bool(typer.confirm(prompt_text, default=default))
-

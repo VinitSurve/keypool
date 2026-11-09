@@ -60,9 +60,6 @@ class HealthState(StrEnum):
         return labels.get(self.value, self.value)
 
 
-
-
-
 class TokenSource(StrEnum):
     """Distinguishes source of token/usage metrics (Section 14)."""
 
@@ -97,6 +94,7 @@ class CredentialRecord(Base):
     __table_args__ = (
         Index("ix_credentials_provider", "provider"),
         Index("ix_credentials_enabled_status", "enabled", "status"),
+        Index("ix_credentials_fingerprint", "secret_fingerprint"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -123,6 +121,15 @@ class CredentialRecord(Base):
     last_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     last_tested_model: Mapped[str | None] = mapped_column(String(128), nullable=True, default=None)
+
+    # v2.0 fields
+    tags: Mapped[str] = mapped_column(String(255), nullable=False, default="[]")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    expires_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+    rotation_interval_days: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    last_rotated_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+    secret_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
 
 
 class HealthObservationRecord(Base):
@@ -183,6 +190,7 @@ class ProfileRecord(Base):
     description: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     preferred_provider: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    selection_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="lru")
     created_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
 
@@ -245,3 +253,73 @@ class UsageEventRecord(Base):
     command_name: Mapped[str | None] = mapped_column(String(128), nullable=True, default=None)
     summary: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     occurred_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+    # v2.0 fields
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+
+
+class ProjectRecord(Base):
+    """Project-level configuration and workspace binding (Section 9)."""
+
+    __tablename__ = "projects"
+    __table_args__ = (Index("ix_projects_root_dir", "root_dir"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    root_dir: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    profile_name: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("profiles.name", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider_overrides: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    model_aliases: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+
+class BudgetRecord(Base):
+    """Configurable budget limit and threshold tracking (Section 13)."""
+
+    __tablename__ = "budgets"
+    __table_args__ = (Index("ix_budgets_scope", "scope_type", "scope_target"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    scope_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # global, provider, project, profile
+    scope_target: Mapped[str | None] = mapped_column(String(120), nullable=True, default=None)
+    amount_limit: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    period: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="monthly"
+    )  # daily, weekly, monthly
+    soft_limit_percent: Mapped[float] = mapped_column(Float, nullable=False, default=80.0)
+    hard_limit_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)
+
+
+class CatalogModelRecord(Base):
+    """Provider model metadata, modalities, pricing, and capability intelligence (Section 10)."""
+
+    __tablename__ = "catalog_models"
+    __table_args__ = (
+        UniqueConstraint("provider", "model_id", name="uq_catalog_model_provider_id"),
+        Index("ix_catalog_models_provider", "provider"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    modalities: Mapped[str] = mapped_column(String(255), nullable=False, default="text")
+    input_price_per_1m: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    output_price_per_1m: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    is_deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False, default=utc_now_iso)

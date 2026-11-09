@@ -47,11 +47,51 @@ class ProviderRegistry:
         hc = self._http_client
 
         # 1. Native Specialized Adapters
-        self.register(GroqProvider(timeout_seconds=to, connect_timeout_seconds=cto, max_retries=mr, backoff_base_seconds=bb, http_client=hc))
-        self.register(GeminiProvider(timeout_seconds=to, connect_timeout_seconds=cto, max_retries=mr, backoff_base_seconds=bb, http_client=hc))
-        self.register(AnthropicProvider(timeout_seconds=to, connect_timeout_seconds=cto, max_retries=mr, backoff_base_seconds=bb, http_client=hc))
-        self.register(CohereProvider(timeout_seconds=to, connect_timeout_seconds=cto, max_retries=mr, backoff_base_seconds=bb, http_client=hc))
-        self.register(ReplicateProvider(timeout_seconds=to, connect_timeout_seconds=cto, max_retries=mr, backoff_base_seconds=bb, http_client=hc))
+        self.register(
+            GroqProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            GeminiProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            AnthropicProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            CohereProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
+        self.register(
+            ReplicateProvider(
+                timeout_seconds=to,
+                connect_timeout_seconds=cto,
+                max_retries=mr,
+                backoff_base_seconds=bb,
+                http_client=hc,
+            )
+        )
 
         # 2. Adapters for Catalog entries
         for name, meta in PROVIDER_CATALOG.items():
@@ -120,7 +160,9 @@ class ProviderRegistry:
                 display_name=cfg.display_name,
                 category=ProviderCategory.CUSTOM,
                 api_type=ProviderAPIType.CUSTOM,
-                auth_type=AuthType.BEARER_TOKEN if cfg.auth_scheme == "Bearer" else AuthType.API_KEY_HEADER,
+                auth_type=AuthType.BEARER_TOKEN
+                if cfg.auth_scheme == "Bearer"
+                else AuthType.API_KEY_HEADER,
                 env_var_name=cfg.env_var_name,
                 base_url=cfg.base_url,
                 default_test_model=cfg.default_test_model,

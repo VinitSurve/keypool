@@ -10,4 +10,3 @@ __all__ = [
     "SCHEMA_VERSION",
     "__version__",
 ]
-

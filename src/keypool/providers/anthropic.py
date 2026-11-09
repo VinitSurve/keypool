@@ -18,8 +18,12 @@ from keypool.security.redaction import redact_text, register_secret_for_redactio
 from keypool.storage.models import HealthState
 
 _FALLBACK_ANTHROPIC_MODELS = [
-    ModelInfo(id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku", supports_generation=True),
-    ModelInfo(id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet", supports_generation=True),
+    ModelInfo(
+        id="claude-3-5-haiku-latest", display_name="Claude 3.5 Haiku", supports_generation=True
+    ),
+    ModelInfo(
+        id="claude-3-5-sonnet-latest", display_name="Claude 3.5 Sonnet", supports_generation=True
+    ),
     ModelInfo(id="claude-3-opus-latest", display_name="Claude 3 Opus", supports_generation=True),
 ]
 
@@ -145,7 +149,9 @@ class AnthropicProvider(BaseProvider):
         if status in (500, 502, 503, 504, 529) or "overloaded_error" in combined:
             return ProviderErrorClassification(
                 state=HealthState.PROVIDER_UNAVAILABLE,
-                error_category="overloaded_error" if "overloaded" in combined else "provider_unavailable",
+                error_category="overloaded_error"
+                if "overloaded" in combined
+                else "provider_unavailable",
                 http_status=status,
                 sanitized_message=f"Anthropic service unavailable (HTTP {status}): {msg}",
                 retry_after_seconds=retry_after or 30,
@@ -256,7 +262,9 @@ class AnthropicProvider(BaseProvider):
             "messages": [{"role": "user", "content": "ping"}],
         }
 
-        resp, exc, gen_latency_ms = self._request_with_retry("POST", gen_url, headers=headers, json_body=payload)
+        resp, exc, gen_latency_ms = self._request_with_retry(
+            "POST", gen_url, headers=headers, json_body=payload
+        )
         total_latency = round(discovery.latency_ms + gen_latency_ms, 2)
 
         if exc is not None or resp is None or resp.status_code != 200:

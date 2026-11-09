@@ -89,4 +89,3 @@ GEMINI_GENERATE_SUCCESS_PAYLOAD: dict[str, Any] = {
         "totalTokenCount": 3,
     },
 }
-

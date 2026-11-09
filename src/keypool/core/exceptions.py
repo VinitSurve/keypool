@@ -118,4 +118,3 @@ class ExecutionError(KeypoolError):
 
     exit_code = int(ExitCode.GENERAL_ERROR)
     error_code = "execution_error"
-

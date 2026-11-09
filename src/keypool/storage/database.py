@@ -151,4 +151,3 @@ class DatabaseManager:
     def close(self) -> None:
         """Dispose engine connections cleanly."""
         self._engine.dispose()
-

@@ -68,4 +68,3 @@ def emit_json_error(
     }
     sys.stderr.write(redact_text(json.dumps(payload, indent=2)) + "\n")
     sys.stderr.flush()
-

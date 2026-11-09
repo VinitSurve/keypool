@@ -483,4 +483,3 @@ class GeminiProvider(BaseProvider):
             classification=None,
             sanitized_message=f"Google Gemini connection and generation verified on '{selected_model}'.",
         )
-
