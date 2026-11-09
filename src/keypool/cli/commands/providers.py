@@ -13,7 +13,7 @@ from keypool.storage.models import HealthState
 
 providers_app = typer.Typer(
     name="providers",
-    help="Inspect registered AI provider adapters (Groq, Google Gemini).",
+    help="Inspect registered AI provider adapters.",
     invoke_without_command=True,
     no_args_is_help=False,
 )
@@ -43,10 +43,14 @@ def providers_index(
         healthy_count = sum(
             1 for c in p_creds if c.enabled and c.status == HealthState.HEALTHY.value
         )
+        meta = ctx.registry.get_metadata(adapter.name)
+        category_str = meta.category.value if meta else "general"
+
         provider_items.append(
             {
                 "name": adapter.name,
                 "display_name": adapter.display_name,
+                "category": category_str,
                 "env_var": adapter.get_environment_variable(),
                 "base_url": adapter.base_url,
                 "docs_url": adapter.docs_url,
@@ -70,6 +74,7 @@ def providers_index(
     )
     table.add_column("ID", style="bold white")
     table.add_column("Display Name", style="white")
+    table.add_column("Category", style="magenta")
     table.add_column("Env Variable", style="cyan")
     table.add_column("Credentials", justify="right")
     table.add_column("Enabled", justify="right", style="blue")
@@ -80,6 +85,7 @@ def providers_index(
         table.add_row(
             str(item["name"]),
             str(item["display_name"]),
+            str(item["category"]),
             str(item["env_var"]),
             str(item["total_credentials"]),
             str(item["enabled_credentials"]),
@@ -91,27 +97,32 @@ def providers_index(
 
 @providers_app.command("show")
 def providers_show(
-    provider: str = typer.Argument(..., help="Provider identifier ('groq' or 'gemini')."),
+    provider: str = typer.Argument(..., help="Provider identifier (e.g. 'openai', 'anthropic', 'groq', 'gemini')."),
     json_output: bool = typer.Option(
         False,
         "--json",
         help="Output machine-readable JSON metadata.",
     ),
 ) -> None:
-    """Display adapter configuration, endpoints, and credentials for a specific provider."""
+    """Display adapter configuration, endpoints, capabilities, and credentials for a specific provider."""
     ctx = RuntimeContext()
     adapter = ctx.registry.get(provider)
     creds = ctx.credential_manager.list_credentials(provider=adapter.name)
+    meta = ctx.registry.get_metadata(adapter.name)
+
+    capabilities_list = [c.value for c in meta.capabilities] if meta else ["streaming"]
 
     data = {
         "name": adapter.name,
         "display_name": adapter.display_name,
+        "category": meta.category.value if meta else "general",
         "env_var": adapter.get_environment_variable(),
         "base_url": adapter.base_url,
         "docs_url": adapter.docs_url,
         "rate_limits_docs_url": adapter.rate_limits_docs_url,
         "models_docs_url": adapter.models_docs_url,
         "default_test_model": adapter.default_test_model,
+        "capabilities": capabilities_list,
         "credential_count": len(creds),
         "credentials": [c.to_public_dict() for c in creds],
     }
@@ -127,6 +138,9 @@ def providers_show(
 
     grid.add_row("Provider ID", f"[bold white]{adapter.name}[/bold white]")
     grid.add_row("Display Name", adapter.display_name)
+    if meta:
+        grid.add_row("Category", meta.category.value.capitalize())
+        grid.add_row("Capabilities", ", ".join(capabilities_list))
     grid.add_row(
         "Environment Variable", f"[bold green]{adapter.get_environment_variable()}[/bold green]"
     )
@@ -146,3 +160,12 @@ def providers_show(
             expand=False,
         )
     )
+
+
+@providers_app.command("inspect")
+def providers_inspect(
+    provider: str = typer.Argument(..., help="Provider identifier to inspect."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON metadata."),
+) -> None:
+    """Inspect adapter details, endpoints, and capabilities (alias for show)."""
+    providers_show(provider=provider, json_output=json_output)

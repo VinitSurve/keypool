@@ -31,6 +31,7 @@ class HealthState(StrEnum):
     AUTH_FAILED = "auth_failed"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMITED = "rate_limited"
+    QUOTA_EXHAUSTED = "quota_exhausted"
     QUOTA_Exhausted = "quota_exhausted"
     MODEL_UNAVAILABLE = "model_unavailable"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
@@ -59,8 +60,7 @@ class HealthState(StrEnum):
         return labels.get(self.value, self.value)
 
 
-# Alias for clean uppercase access
-HealthState.QUOTA_EXHAUSTED = HealthState.QUOTA_Exhausted  # type: ignore[attr-defined]
+
 
 
 class TokenSource(StrEnum):

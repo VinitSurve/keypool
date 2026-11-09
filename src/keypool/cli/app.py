@@ -30,7 +30,7 @@ from keypool.cli.commands.profiles import (
     profile_show,
     profile_unassign,
 )
-from keypool.cli.commands.providers import providers_index, providers_show
+from keypool.cli.commands.providers import providers_index, providers_inspect, providers_show
 from keypool.cli.commands.usage import cmd_usage
 from keypool.cli.formatting import (
     RuntimeContext,
@@ -104,6 +104,7 @@ providers_subapp = typer.Typer(
 )
 providers_subapp.callback()(handle_cli_errors(providers_index))
 providers_subapp.command("show")(handle_cli_errors(providers_show))
+providers_subapp.command("inspect")(handle_cli_errors(providers_inspect))
 
 profile_subapp = typer.Typer(
     name="profile",
@@ -179,5 +180,6 @@ app.command("get")(handle_cli_errors(cmd_get))
 app.command("usage")(handle_cli_errors(cmd_usage))
 
 app.add_typer(providers_subapp, name="providers")
+app.add_typer(providers_subapp, name="provider")
 app.add_typer(profile_subapp, name="profile")
 
