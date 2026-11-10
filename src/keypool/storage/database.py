@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from keypool.config.settings import AppPaths
 from keypool.core.exceptions import SecurityError, StorageError
@@ -67,7 +68,7 @@ class DatabaseManager:
         self._engine: Engine = create_engine(
             f"sqlite:///{self.db_path}",
             connect_args={"timeout": 10.0, "check_same_thread": False},
-            pool_pre_ping=True,
+            poolclass=NullPool,
         )
 
         @event.listens_for(self._engine, "connect")
@@ -151,3 +152,7 @@ class DatabaseManager:
     def close(self) -> None:
         """Dispose engine connections cleanly."""
         self._engine.dispose()
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            self.close()

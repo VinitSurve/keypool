@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -117,6 +118,16 @@ class RuntimeContext:
         """Dispose database engine connections cleanly."""
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            self.close()
+
+    def __enter__(self) -> RuntimeContext:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
 
 def get_console(*, stderr: bool = False, color_mode: str = "auto") -> Console:
