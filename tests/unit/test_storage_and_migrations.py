@@ -83,3 +83,52 @@ def test_concurrent_credential_additions_no_duplicate_records(
     assert len(set(created_ids)) == 12
     all_creds = cm.list_credentials()
     assert len(all_creds) == 12
+
+
+def test_sqlite_high_concurrency_nullpool_wal_stress(
+    runtime_ctx: RuntimeContext,
+) -> None:
+    """Stress test multi-threaded SQLite read/write transactions under WAL mode and NullPool."""
+    import concurrent.futures
+
+    cm = runtime_ctx.credential_manager
+    tracker = runtime_ctx.usage_tracker
+    engine = runtime_ctx.selection_engine
+
+    # Seed 3 credentials
+    for i in range(3):
+        cm.add_credential(
+            provider="groq",
+            name=f"Stress Key {i}",
+            secret=f"gsk_STRESSFAKEKEY00000000000000{i:04d}",
+            priority=100 - i * 10,
+        )
+
+    errors: list[Exception] = []
+
+    def stress_worker(worker_id: int) -> None:
+        try:
+            for j in range(20):
+                # Interleave selection (read/write check) and event recording (insert write)
+                sel = engine.select_credential(provider="groq")
+                assert sel.metadata.id
+                tracker.record_event(
+                    provider="groq",
+                    event_type="gateway_completion",
+                    status="success" if j % 5 != 0 else "failure",
+                    credential_id=sel.metadata.id,
+                    model="llama-3.3-70b-versatile",
+                    duration_ms=12.5,
+                )
+        except Exception as exc:
+            errors.append(exc)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as pool:
+        futures = [pool.submit(stress_worker, w) for w in range(25)]
+        concurrent.futures.wait(futures)
+
+    assert not errors, f"Encountered {len(errors)} concurrency errors: {errors[:3]}"
+
+    report = tracker.get_usage_report(provider="groq")
+    assert report.total_executions == 25 * 20
+    assert report.successful_executions > 0

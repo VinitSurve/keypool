@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from starlette.testclient import TestClient
 from tests.fixtures.provider_payloads import FAKE_GROQ_KEY_1, FAKE_GROQ_KEY_2
 
 from keypool.gateway.app import create_gateway_app
 from keypool.gateway.auth import GatewayAuth
 from keypool.gateway.router import GatewayRouter
+from keypool.storage.models import HealthState
 
 
 def test_gateway_auth_token_generation_and_validation(runtime_ctx: Any) -> None:
@@ -28,41 +28,43 @@ def test_gateway_auth_token_generation_and_validation(runtime_ctx: Any) -> None:
     assert auth.validate_token(token) is False
 
 
-def test_gateway_app_endpoints_and_auth(runtime_ctx: Any) -> None:
+@pytest.mark.anyio
+async def test_gateway_app_endpoints_and_auth(runtime_ctx: Any) -> None:
     token = "test_secret_token"
     app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
-    client = TestClient(app)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Root and health are public
+        resp = await client.get("/")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "running"
 
-    # Root and health are public
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "running"
+        resp = await client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "healthy"
 
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "healthy"
+        # Protected endpoints without token -> 401
+        resp = await client.get("/v1/models")
+        assert resp.status_code == 401
 
-    # Protected endpoints without token -> 401
-    resp = client.get("/v1/models")
-    assert resp.status_code == 401
+        resp = await client.get("/v1/models", headers={"Authorization": "Bearer wrong_token"})
+        assert resp.status_code == 401
 
-    resp = client.get("/v1/models", headers={"Authorization": "Bearer wrong_token"})
-    assert resp.status_code == 401
+        # Protected endpoints with valid token -> 200
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = await client.get("/v1/models", headers=headers)
+        assert resp.status_code == 200
+        models_data = resp.json()
+        assert "data" in models_data
+        alias_ids = [m["id"] for m in models_data["data"]]
+        assert "fast" in alias_ids
+        assert "smart" in alias_ids
 
-    # Protected endpoints with valid token -> 200
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.get("/v1/models", headers=headers)
-    assert resp.status_code == 200
-    models_data = resp.json()
-    assert "data" in models_data
-    alias_ids = [m["id"] for m in models_data["data"]]
-    assert "fast" in alias_ids
-    assert "smart" in alias_ids
-
-    # Metrics endpoint
-    resp = client.get("/v1/metrics", headers=headers)
-    assert resp.status_code == 200
-    assert "usage" in resp.json()
+        # Metrics endpoint
+        resp = await client.get("/v1/metrics", headers=headers)
+        assert resp.status_code == 200
+        assert "usage" in resp.json()
 
 
 def test_gateway_router_resolves_aliases_and_models(runtime_ctx: Any) -> None:
@@ -390,3 +392,180 @@ def test_gateway_cli_commands(isolated_env: Any) -> None:
     res_regen = runner.invoke(app, ["gateway", "token", "--regenerate"])
     assert res_regen.exit_code == 0
     assert "New Gateway Token generated:" in res_regen.stdout
+
+
+@pytest.mark.anyio
+async def test_gateway_streaming_failover_and_client_cleanup(runtime_ctx: Any) -> None:
+    """Verify that when the primary credential fails with 429 during streaming initiation,
+    the gateway fails over to the backup credential without leaking any httpx.AsyncClient handles."""
+    runtime_ctx.credential_manager.add_credential(
+        provider="groq",
+        name="Key Primary Stream",
+        secret=FAKE_GROQ_KEY_1,
+        priority=100,
+    )
+    runtime_ctx.credential_manager.add_credential(
+        provider="groq",
+        name="Key Backup Stream",
+        secret=FAKE_GROQ_KEY_2,
+        priority=50,
+    )
+
+    token = "test_stream_token"
+    app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
+
+    clients_created: list[httpx.AsyncClient] = []
+    orig_init = httpx.AsyncClient.__init__
+
+    def track_init(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        orig_init(self, *args, **kwargs)
+        clients_created.append(self)
+
+    call_count = 0
+    orig_send = httpx.AsyncClient.send
+
+    async def mock_send(self: httpx.AsyncClient, req: httpx.Request, *args: Any, **kwargs: Any) -> Any:
+        nonlocal call_count
+        if "api.groq.com" in str(req.url):
+            call_count += 1
+            if call_count == 1:
+                r = httpx.Response(429, request=req, text="Rate limit exceeded")
+                return r
+            async def aiter() -> Any:
+                yield b'data: {"choices": [{"delta": {"content": "Streamed OK"}}]}\n\n'
+                yield b"data: [DONE]\n\n"
+            r = httpx.Response(200, request=req)
+            object.__setattr__(r, "aiter_raw", aiter)
+            return r
+        return await orig_send(self, req, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "__init__", new=track_init), patch.object(
+        httpx.AsyncClient, "send", new=mock_send
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "groq/llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+            assert resp.status_code == 200
+            stream_body = resp.text
+            assert "Streamed OK" in stream_body
+            assert "data: [DONE]" in stream_body
+            assert call_count == 2
+
+    # Verify that all upstream streaming AsyncClients have been cleanly closed
+    for cl in clients_created:
+        assert cl.is_closed, "Leaked unclosed httpx.AsyncClient instance found!"
+
+
+@pytest.mark.anyio
+async def test_gateway_streaming_midstream_disconnection_and_health_degradation(
+    runtime_ctx: Any,
+) -> None:
+    """Verify that when an upstream network disconnect happens midway through SSE streaming,
+    the credential health is updated to NETWORK_ERROR, usage failure is recorded, and client receives an error event."""
+    runtime_ctx.credential_manager.add_credential(
+        provider="groq",
+        name="Key Drop Stream",
+        secret=FAKE_GROQ_KEY_1,
+        priority=100,
+    )
+
+    token = "test_stream_token"
+    app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
+
+    orig_send = httpx.AsyncClient.send
+
+    async def mock_send(self: httpx.AsyncClient, req: httpx.Request, *args: Any, **kwargs: Any) -> Any:
+        if "api.groq.com" in str(req.url):
+            async def aiter() -> Any:
+                yield b'data: {"choices": [{"delta": {"content": "Initial chunk"}}]}\n\n'
+                raise httpx.RemoteProtocolError("Peer closed connection unexpectedly")
+
+            r = httpx.Response(200, request=req)
+            object.__setattr__(r, "aiter_raw", aiter)
+            return r
+        return await orig_send(self, req, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "send", new=mock_send):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "groq/llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+            assert resp.status_code == 200
+            stream_text = resp.text
+            assert "Initial chunk" in stream_text
+            assert "upstream_stream_error" in stream_text
+
+    # Verify credential health was degraded to NETWORK_ERROR
+    creds = runtime_ctx.credential_manager.list_credentials(provider="groq")
+    snapshot = runtime_ctx.health_manager.get_cached_snapshot(creds[0])
+    assert snapshot.state == HealthState.NETWORK_ERROR
+
+    # Verify usage tracker recorded failure
+    report = runtime_ctx.usage_tracker.get_usage_report()
+    assert report.failed_executions >= 1
+
+
+@pytest.mark.anyio
+async def test_gateway_anthropic_streaming_midstream_disconnection(runtime_ctx: Any) -> None:
+    """Verify Anthropic SSE translator degrades health to NETWORK_ERROR on mid-stream disconnection."""
+    runtime_ctx.credential_manager.add_credential(
+        provider="anthropic",
+        name="Claude Stream Key",
+        secret="sk-ant-api03-testdisconnect1234567890abcdef1234567890",
+        priority=100,
+    )
+
+    token = "test_stream_token"
+    app = create_gateway_app(runtime_ctx, require_auth=True, token_override=token)
+
+    orig_send = httpx.AsyncClient.send
+
+    async def mock_send(self: httpx.AsyncClient, req: httpx.Request, *args: Any, **kwargs: Any) -> Any:
+        if "api.anthropic.com" in str(req.url):
+            async def aiter() -> Any:
+                yield b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Start"}}\n\n'
+                raise httpx.ReadTimeout("Read timed out from Anthropic")
+
+            r = httpx.Response(200, request=req)
+            object.__setattr__(r, "aiter_raw", aiter)
+            return r
+        return await orig_send(self, req, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "send", new=mock_send):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "claude-3-5-haiku-latest",
+                    "messages": [{"role": "user", "content": "Ping"}],
+                    "stream": True,
+                },
+            )
+            assert resp.status_code == 200
+            stream_text = resp.text
+            assert "Start" in stream_text
+            assert "upstream_stream_error" in stream_text
+
+    creds = runtime_ctx.credential_manager.list_credentials(provider="anthropic")
+    snapshot = runtime_ctx.health_manager.get_cached_snapshot(creds[0])
+    assert snapshot.state == HealthState.NETWORK_ERROR

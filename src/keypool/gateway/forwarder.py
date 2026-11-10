@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -209,20 +210,52 @@ class GatewayForwarder:
 
         if is_stream:
             client = httpx.AsyncClient(timeout=60.0)
-            req = client.build_request("POST", url, headers=headers, json=req_body)
-            resp = await client.send(req, stream=True)
-            if resp.status_code != 200:
-                await resp.aread()
-                resp.raise_for_status()
+            resp: httpx.Response | None = None
+            try:
+                req = client.build_request("POST", url, headers=headers, json=req_body)
+                resp = await client.send(req, stream=True)
+                if resp.status_code != 200:
+                    await resp.aread()
+                    resp.raise_for_status()
+            except Exception:
+                if resp is not None:
+                    await resp.aclose()
+                await client.aclose()
+                raise
+
+            assert resp is not None
+            active_resp = resp
 
             async def stream_generator() -> AsyncIterator[bytes]:
                 stream_success = False
                 try:
-                    async for chunk in resp.aiter_raw():
+                    async for chunk in active_resp.aiter_raw():
                         yield chunk
                     stream_success = True
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except Exception as exc:
+                    self.ctx.health_manager.record_runtime_failure(
+                        cred_id,
+                        ProviderErrorClassification(
+                            state=HealthState.NETWORK_ERROR,
+                            error_category="network_error",
+                            http_status=None,
+                            sanitized_message=str(exc)[:200],
+                            retry_after_seconds=5,
+                            is_retryable=True,
+                        ),
+                    )
+                    error_payload = {
+                        "error": {
+                            "message": f"Stream interrupted: {exc}",
+                            "type": "upstream_stream_error",
+                            "code": "stream_disconnected",
+                        }
+                    }
+                    yield f"data: {json.dumps(error_payload)}\n\n".encode()
                 finally:
-                    await resp.aclose()
+                    await active_resp.aclose()
                     await client.aclose()
                     duration_ms = (time.monotonic() - start_time) * 1000.0
                     self.ctx.usage_tracker.record_event(
@@ -310,12 +343,21 @@ class GatewayForwarder:
         if is_stream:
             req_body["stream"] = True
             client = httpx.AsyncClient(timeout=60.0)
-            req = client.build_request("POST", url, headers=headers, json=req_body)
-            resp = await client.send(req, stream=True)
-            if resp.status_code != 200:
-                await resp.aread()
-                resp.raise_for_status()
+            resp: httpx.Response | None = None
+            try:
+                req = client.build_request("POST", url, headers=headers, json=req_body)
+                resp = await client.send(req, stream=True)
+                if resp.status_code != 200:
+                    await resp.aread()
+                    resp.raise_for_status()
+            except Exception:
+                if resp is not None:
+                    await resp.aclose()
+                await client.aclose()
+                raise
 
+            assert resp is not None
+            active_resp = resp
             chatcmpl_id = f"chatcmpl-{int(time.time() * 1000)}"
             created_ts = int(time.time())
 
@@ -323,7 +365,7 @@ class GatewayForwarder:
                 stream_success = False
                 try:
                     buffer = ""
-                    async for raw_chunk in resp.aiter_raw():
+                    async for raw_chunk in active_resp.aiter_raw():
                         buffer += raw_chunk.decode("utf-8", errors="replace")
                         while "\n\n" in buffer:
                             event_block, buffer = buffer.split("\n\n", 1)
@@ -371,8 +413,30 @@ class GatewayForwarder:
                                         yield f"data: {json.dumps(chunk_dict)}\n\n".encode()
                                         yield b"data: [DONE]\n\n"
                     stream_success = True
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except Exception as exc:
+                    self.ctx.health_manager.record_runtime_failure(
+                        cred_id,
+                        ProviderErrorClassification(
+                            state=HealthState.NETWORK_ERROR,
+                            error_category="network_error",
+                            http_status=None,
+                            sanitized_message=str(exc)[:200],
+                            retry_after_seconds=5,
+                            is_retryable=True,
+                        ),
+                    )
+                    error_payload = {
+                        "error": {
+                            "message": f"Anthropic stream interrupted: {exc}",
+                            "type": "upstream_stream_error",
+                            "code": "stream_disconnected",
+                        }
+                    }
+                    yield f"data: {json.dumps(error_payload)}\n\n".encode()
                 finally:
-                    await resp.aclose()
+                    await active_resp.aclose()
                     await client.aclose()
                     duration_ms = (time.monotonic() - start_time) * 1000.0
                     self.ctx.usage_tracker.record_event(

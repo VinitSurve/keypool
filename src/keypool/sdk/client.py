@@ -113,16 +113,20 @@ class CompletionsResource:
             )
             payload["stream"] = True
             client = httpx.Client(timeout=self._client.timeout)
-            req = client.build_request("POST", url, headers=headers, json=payload)
-            stream_resp = client.send(req, stream=True)
-            if stream_resp.status_code != 200:
-                stream_resp.read()
-                stream_resp.close()
+            try:
+                req = client.build_request("POST", url, headers=headers, json=payload)
+                stream_resp = client.send(req, stream=True)
+                if stream_resp.status_code != 200:
+                    stream_resp.read()
+                    stream_resp.close()
+                    client.close()
+                    classification = adapter.classify_error(stream_resp)
+                    raise ProviderExecutionError(
+                        f"{adapter.display_name} streaming call failed (HTTP {stream_resp.status_code}): {classification.sanitized_message}",
+                    )
+            except Exception:
                 client.close()
-                classification = adapter.classify_error(stream_resp)
-                raise ProviderExecutionError(
-                    f"{adapter.display_name} streaming call failed (HTTP {stream_resp.status_code}): {classification.sanitized_message}",
-                )
+                raise
 
             def stream_gen() -> Iterator[ChatCompletionChunk]:
                 try:
@@ -484,6 +488,7 @@ class KeypoolClient:
         timeout: float = 30.0,
         runtime_context: RuntimeContext | None = None,
     ) -> None:
+        self._owns_ctx = runtime_context is None
         self._runtime_ctx = runtime_context or RuntimeContext()
         self.timeout = timeout
         pm = ProjectManager(self._runtime_ctx.db)
@@ -508,7 +513,8 @@ class KeypoolClient:
 
     def close(self) -> None:
         """Release underlying resources."""
-        self._runtime_ctx.close()
+        if self._owns_ctx:
+            self._runtime_ctx.close()
 
     def get_key(
         self,
