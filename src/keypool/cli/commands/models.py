@@ -64,6 +64,47 @@ def models_index(
     console.print(table)
 
 
+@models_app.command("list")
+def cmd_models_list(
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Filter by provider."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """List available provider models in the catalog."""
+    ctx = RuntimeContext()
+    mcm = ModelCatalogManager(ctx.db)
+    models = mcm.list_models(provider=provider)
+
+    if json_output:
+        emit_json("models", {"models": [m.to_public_dict() for m in models]})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    table = Table(
+        title="[bold cyan]AI Model Catalog Snapshot[/bold cyan]",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        border_style="cyan",
+    )
+    table.add_column("Provider", style="cyan", width=14)
+    table.add_column("Model ID", style="bold white")
+    table.add_column("Display Name", style="white")
+    table.add_column("Context", justify="right", style="green")
+    table.add_column("Max Output", justify="right")
+    table.add_column("Pricing / 1M (In/Out)", justify="right")
+
+    for m in models:
+        p_str = (
+            f"${m.input_price_per_1m:.2f} / ${m.output_price_per_1m:.2f}"
+            if m.input_price_per_1m
+            else "-"
+        )
+        ctx_str = f"{m.context_window // 1000}k" if m.context_window else "-"
+        out_str = f"{m.max_output_tokens // 1000}k" if m.max_output_tokens else "-"
+        table.add_row(m.provider, m.model_id, m.display_name, ctx_str, out_str, p_str)
+
+    console.print(table)
+
+
 @models_app.command("search")
 def cmd_models_search(
     query: str = typer.Argument(..., help="Search term (model name or provider)."),
@@ -100,6 +141,7 @@ def cmd_models_search(
 
 
 @models_app.command("inspect")
+@models_app.command("show")
 def cmd_models_inspect(
     model: str = typer.Argument(
         ..., help="Model identifier (e.g. 'gpt-4o-mini', 'claude-3-5-sonnet-latest')."

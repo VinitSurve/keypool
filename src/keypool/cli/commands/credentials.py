@@ -470,27 +470,36 @@ def cmd_history(
 
 def cmd_bulk_enable(
     credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to enable."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Enable multiple credentials at once."""
     ctx = RuntimeContext()
-    console = get_console(color_mode=ctx.settings.color)
     updated = ctx.credential_manager.bulk_set_enabled(credential_ids, enabled=True)
+    if json_output:
+        emit_json("bulk.enable", {"enabled": [c.to_public_dict() for c in updated]})
+        return
+    console = get_console(color_mode=ctx.settings.color)
     console.print(f"[bold green]✓ Enabled {len(updated)} of {len(credential_ids)} credentials.[/bold green]")
 
 
 def cmd_bulk_disable(
     credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to disable."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Disable multiple credentials at once."""
     ctx = RuntimeContext()
-    console = get_console(color_mode=ctx.settings.color)
     updated = ctx.credential_manager.bulk_set_enabled(credential_ids, enabled=False)
+    if json_output:
+        emit_json("bulk.disable", {"disabled": [c.to_public_dict() for c in updated]})
+        return
+    console = get_console(color_mode=ctx.settings.color)
     console.print(f"[bold yellow]○ Disabled {len(updated)} of {len(credential_ids)} credentials.[/bold yellow]")
 
 
 def cmd_bulk_remove(
     credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to permanently remove."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Permanently delete multiple credentials."""
     ctx = RuntimeContext()
@@ -505,17 +514,24 @@ def cmd_bulk_remove(
             raise typer.Exit(int(ExitCode.SUCCESS))
 
     removed = ctx.credential_manager.bulk_remove_credentials(credential_ids)
+    if json_output:
+        emit_json("bulk.remove", {"removed": [c.to_public_dict() for c in removed]})
+        return
     console.print(f"[bold green]✓ Removed {len(removed)} credentials.[/bold green]")
 
 
 def cmd_bulk_tag(
     credential_ids: list[str] = typer.Argument(..., help="List of credential IDs to tag."),
     tag: list[str] = typer.Option(..., "--tag", "-t", help="Tag(s) to assign."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Assign tags to multiple credentials."""
     ctx = RuntimeContext()
-    console = get_console(color_mode=ctx.settings.color)
     updated = ctx.credential_manager.bulk_tag(credential_ids, tag)
+    if json_output:
+        emit_json("bulk.tag", {"tagged": [c.to_public_dict() for c in updated]})
+        return
+    console = get_console(color_mode=ctx.settings.color)
     console.print(f"[bold green]✓ Tagged {len(updated)} credentials with: {', '.join(tag)}[/bold green]")
 
 

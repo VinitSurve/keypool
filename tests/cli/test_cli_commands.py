@@ -247,3 +247,126 @@ def test_cli_expanded_commands(
     assert res_tui_prov.exit_code == 0
     assert "Registered Provider" in res_tui_prov.stdout
 
+
+def test_cli_budgets_and_models_lifecycle(
+    isolated_env: tuple[AppPaths, InMemorySecretStore],
+) -> None:
+    """Verify budget CRUD, forecasting, and models catalog/alias commands."""
+    # 1. Budget set
+    res_set = runner.invoke(
+        app,
+        ["budget", "set", "Monthly Cap", "-a", "100.0", "-s", "global", "-p", "monthly", "--json"],
+    )
+    assert res_set.exit_code == 0
+    b_data = json.loads(res_set.stdout)
+    b_id = b_data["data"]["id"]
+
+    # 2. Budget list
+    res_list = runner.invoke(app, ["budget", "list", "--json"])
+    assert res_list.exit_code == 0
+    assert any(b["id"] == b_id for b in json.loads(res_list.stdout)["data"]["budgets"])
+
+    # 3. Budget check
+    res_chk = runner.invoke(app, ["budget", "check", "--json"])
+    assert res_chk.exit_code == 0
+
+    # 4. Budget forecast
+    res_fc = runner.invoke(app, ["budget", "forecast", b_id, "--json"])
+    assert res_fc.exit_code == 0
+    assert "projected_spend" in res_fc.stdout
+
+    # 5. Budget delete
+    res_del = runner.invoke(app, ["budget", "delete", b_id, "--json"])
+    assert res_del.exit_code == 0
+
+    # 6. Models list and search
+    res_mlist = runner.invoke(app, ["models", "list", "--json"])
+    assert res_mlist.exit_code == 0
+
+    res_msearch = runner.invoke(app, ["models", "search", "gpt", "--json"])
+    assert res_msearch.exit_code == 0
+
+    res_mshow = runner.invoke(app, ["models", "show", "gpt-4o", "-p", "openai", "--json"])
+    assert res_mshow.exit_code == 0
+
+    # 7. Model aliases
+    res_alias_set = runner.invoke(
+        app, ["models", "alias", "set", "my_fast", "openai/gpt-4o-mini", "--json"]
+    )
+    assert res_alias_set.exit_code == 0
+    res_alias_list = runner.invoke(app, ["models", "alias", "list", "--json"])
+    assert res_alias_list.exit_code == 0
+    res_alias_rm = runner.invoke(app, ["models", "alias", "remove", "my_fast", "--json"])
+    assert res_alias_rm.exit_code == 0
+
+
+def test_cli_bulk_and_export_lifecycle(
+    isolated_env: tuple[AppPaths, InMemorySecretStore],
+) -> None:
+    """Verify bulk operations, history audit timeline, and encrypted bundle export/import."""
+    paths, secret_store = isolated_env
+    # Add a credential
+    res_add = runner.invoke(
+        app,
+        ["add", "groq", "--name", "Bulk Test Key"],
+        input=f"{FAKE_GROQ_KEY_1}\n",
+    )
+    assert res_add.exit_code == 0
+    res_list = runner.invoke(app, ["list", "--json"])
+    groq_id = json.loads(res_list.stdout)["data"]["credentials"][0]["id"]
+
+    # Bulk tag
+    res_tag = runner.invoke(app, ["bulk-tag", groq_id, "--tag", "production", "--json"])
+    assert res_tag.exit_code == 0
+
+    # Bulk disable
+    res_dis = runner.invoke(app, ["bulk-disable", groq_id, "--json"])
+    assert res_dis.exit_code == 0
+
+    # Bulk enable
+    res_en = runner.invoke(app, ["bulk-enable", groq_id, "--json"])
+    assert res_en.exit_code == 0
+
+    # History
+    res_hist = runner.invoke(app, ["history", groq_id, "--json"])
+    assert res_hist.exit_code == 0
+
+    # Export keys
+    bundle_path = str(paths.app_dir / "test_export.kpbundle")
+    res_exp = runner.invoke(
+        app,
+        ["export-keys", "--output", bundle_path, "--passphrase", "SecretPassphrase123"],
+    )
+    assert res_exp.exit_code == 0
+
+    # Import keys
+    res_imp = runner.invoke(
+        app,
+        ["import-keys", bundle_path, "--passphrase", "SecretPassphrase123", "--allow-duplicate"],
+    )
+    assert res_imp.exit_code == 0
+
+
+def test_cli_tui_all_tabs(
+    isolated_env: tuple[AppPaths, InMemorySecretStore],
+) -> None:
+    """Verify that all 12 TUI views render without crashing."""
+    tabs = [
+        "overview",
+        "credentials",
+        "providers",
+        "health",
+        "models",
+        "profiles",
+        "projects",
+        "usage",
+        "budgets",
+        "gateway",
+        "settings",
+        "diagnostics",
+    ]
+    for tab in tabs:
+        res = runner.invoke(app, ["tui", "--view", tab])
+        assert res.exit_code == 0, f"TUI failed on tab {tab}: {res.output}"
+
+

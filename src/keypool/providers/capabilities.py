@@ -915,6 +915,87 @@ PROVIDER_CATALOG: dict[str, ProviderMetadata] = {
 }
 
 
+# Canonical provider aliases mapping common aliases and colloquial names to registered IDs
+PROVIDER_ALIASES: dict[str, str] = {
+    # Azure OpenAI & Microsoft AI Foundry
+    "azure": "azure_openai",
+    "azure-openai": "azure_openai",
+    "azureopenai": "azure_openai",
+    "foundry": "azure_ai",
+    "azure_ai": "azure_ai",
+    "azure-ai": "azure_ai",
+    "azure_foundry": "azure_ai",
+    "microsoft": "azure_ai",
+    "microsoft-ai": "azure_ai",
+    # 01.AI (Yi)
+    "01ai": "yi",
+    "01-ai": "yi",
+    "01.ai": "yi",
+    "lingyi": "yi",
+    # Volcano Engine (Doubao / Ark)
+    "volcano": "doubao",
+    "volcengine": "doubao",
+    "volcano-engine": "doubao",
+    "bytedance": "doubao",
+    "ark": "doubao",
+    # Together AI
+    "togetherai": "together",
+    "together-ai": "together",
+    # Llama.cpp
+    "llama.cpp": "llamacpp",
+    "llama-cpp": "llamacpp",
+    "llama_cpp": "llamacpp",
+    # Hugging Face
+    "hf": "huggingface",
+    "hugging-face": "huggingface",
+    # Mistral AI
+    "mistralai": "mistral",
+    "mistral-ai": "mistral",
+    # DeepSeek
+    "deepseekai": "deepseek",
+    "deepseek-ai": "deepseek",
+    # Alibaba DashScope / Qwen
+    "ali": "dashscope",
+    "alibaba": "dashscope",
+    "qwen": "dashscope",
+    "ali-dashscope": "dashscope",
+    # Moonshot / Kimi
+    "moonshotai": "moonshot",
+    "kimi": "moonshot",
+    # Zhipu / GLM
+    "zhipuai": "zhipu",
+    "glm": "zhipu",
+    # Tencent Hunyuan
+    "tencent": "hunyuan",
+    # Baidu ERNIE / Qianfan
+    "baidu": "ernie",
+    "qianfan": "ernie",
+    # Amazon Bedrock
+    "aws": "bedrock",
+    "aws-bedrock": "bedrock",
+    "amazon-bedrock": "bedrock",
+    # Google Vertex AI
+    "gcp": "vertex",
+    "google-vertex": "vertex",
+    "vertexai": "vertex",
+    "vertex-ai": "vertex",
+    # IBM watsonx.ai
+    "ibm": "watsonx",
+    "watson": "watsonx",
+    "watsonx-ai": "watsonx",
+    # Local runners
+    "lm-studio": "lmstudio",
+    "local-ai": "localai",
+}
+
+
+def normalize_provider_name(name: str) -> str:
+    """Normalize provider name, handling aliases, punctuation, and case."""
+    cleaned = name.strip().lower()
+    return PROVIDER_ALIASES.get(cleaned, cleaned)
+
+
 def get_provider_metadata(provider_name: str) -> ProviderMetadata | None:
-    """Return capability metadata for a registered provider identifier."""
-    return PROVIDER_CATALOG.get(provider_name.strip().lower())
+    """Return capability metadata for a registered provider identifier or alias."""
+    norm = normalize_provider_name(provider_name)
+    return PROVIDER_CATALOG.get(norm)

@@ -384,3 +384,61 @@ def test_watsonx_adapter_conformance() -> None:
     assert conn.success is True
     assert conn.functional_ok is True
 
+
+def test_provider_alias_resolution_conformance() -> None:
+    """Verify that colloquial provider names and aliases map to canonical adapters."""
+    from keypool.providers.capabilities import PROVIDER_ALIASES, normalize_provider_name
+    from keypool.security.validation import validate_provider_name
+
+    registry = ProviderRegistry()
+
+    alias_expectations = {
+        "azure": "azure_openai",
+        "azure-openai": "azure_openai",
+        "llama.cpp": "llamacpp",
+        "llama-cpp": "llamacpp",
+        "01ai": "yi",
+        "01.ai": "yi",
+        "volcengine": "doubao",
+        "volcano": "doubao",
+        "togetherai": "together",
+        "hf": "huggingface",
+        "aws": "bedrock",
+        "gcp": "vertex",
+        "ibm": "watsonx",
+        "lm-studio": "lmstudio",
+        "local-ai": "localai",
+        "mistralai": "mistral",
+        "deepseekai": "deepseek",
+    }
+
+    for alias, expected in alias_expectations.items():
+        assert alias in PROVIDER_ALIASES
+        assert normalize_provider_name(alias) == expected
+        assert validate_provider_name(alias) == expected
+        adapter = registry.get(alias)
+        assert adapter.name == expected
+        meta = registry.get_metadata(alias)
+        assert meta is not None
+        assert meta.name == expected
+        assert registry.is_registered(alias) is True
+
+
+def test_local_provider_adapters_conformance() -> None:
+    """Verify local runner providers (Ollama, LM Studio, vLLM, llama.cpp, LocalAI, SGLang) work without API keys."""
+    registry = ProviderRegistry()
+    local_providers = ["ollama", "lmstudio", "vllm", "llamacpp", "localai", "sglang"]
+
+    for lp in local_providers:
+        adapter = registry.get(lp)
+        meta = registry.get_metadata(lp)
+        assert meta is not None
+        assert meta.category == ProviderCategory.LOCAL
+        assert adapter.requires_key is False
+
+        # Build headers with dummy/empty key should not crash and contain valid content type
+        headers = adapter._build_headers("")
+        assert "Content-Type" in headers
+        assert "Authorization" not in headers  # No auth header needed for local engines
+
+

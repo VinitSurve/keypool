@@ -13,7 +13,7 @@ from keypool.security.redaction import register_secret_for_redaction
 
 _CREDENTIAL_ID_RE = re.compile(r"^cred_[a-z0-9]{6,36}$")
 _PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_\-]{1,48}$")
-_PROVIDER_NAME_RE = re.compile(r"^[a-z][a-z0-9_\-]{1,32}$")
+_PROVIDER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.\-]{0,35}$")
 _LOOKS_LIKE_SECRET_RE = re.compile(
     r"^(?:gsk_[A-Za-z0-9_\-]{12,}|AIza[0-9A-Za-z_\-]{20,}|sk-[A-Za-z0-9_\-]{15,})$"
 )
@@ -60,12 +60,15 @@ def validate_profile_name(profile_name: str) -> str:
 
 
 def validate_provider_name(provider_name: str) -> str:
-    """Validate and normalize a provider identifier."""
-    cleaned = provider_name.strip().lower()
+    """Validate and normalize a provider identifier, resolving known aliases."""
+    raw = provider_name.strip().lower()
+    from keypool.providers.capabilities import normalize_provider_name
+
+    cleaned = normalize_provider_name(raw)
     if not _PROVIDER_NAME_RE.match(cleaned):
         raise InvalidArgumentError(
             f"Invalid provider identifier '{provider_name}'.",
-            hint="Supported providers: 'groq', 'gemini'.",
+            hint="Supported providers: 'openai', 'anthropic', 'gemini', 'groq', 'mistral', 'deepseek', 'azure_openai', etc.",
         )
     return cleaned
 

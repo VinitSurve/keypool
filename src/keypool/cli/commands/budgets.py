@@ -194,3 +194,72 @@ def cmd_budget_forecast(
             box=box.ROUNDED,
         )
     )
+
+
+@budgets_app.command("list")
+def cmd_budget_list(
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """List configured budgets and current period spend."""
+    ctx = RuntimeContext()
+    bm = BudgetManager(ctx.db)
+    budgets = bm.list_budgets()
+
+    if json_output:
+        emit_json("budgets", {"budgets": [b.to_public_dict() for b in budgets]})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    table = Table(
+        title="[bold cyan]Configured Budgets & Cost Controls[/bold cyan]",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        border_style="cyan",
+    )
+    table.add_column("ID", style="bold white", width=12)
+    table.add_column("Name", style="white")
+    table.add_column("Scope", style="magenta")
+    table.add_column("Period", style="cyan")
+    table.add_column("Limit", justify="right", style="white")
+    table.add_column("Current Spend", justify="right")
+    table.add_column("Used %", justify="right")
+    table.add_column("Status", justify="center")
+
+    for b in budgets:
+        scope_str = f"{b.scope_type}:{b.scope_target}" if b.scope_target else b.scope_type
+        stat_color = "red" if b.is_exceeded else "yellow" if b.is_warning else "green"
+        stat_label = "EXCEEDED" if b.is_exceeded else "WARNING" if b.is_warning else "OK"
+        table.add_row(
+            b.id,
+            b.name,
+            scope_str,
+            b.period,
+            f"${b.amount_limit:.2f}",
+            f"${b.current_spend:.4f}",
+            f"{b.percent_used:.1f}%",
+            f"[{stat_color}]{stat_label}[/{stat_color}]",
+        )
+    console.print(table)
+
+
+@budgets_app.command("remove")
+@budgets_app.command("delete")
+def cmd_budget_remove(
+    budget_id: str = typer.Argument(..., help="Budget ID to remove (e.g. bgt_a83f)."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Remove a configured budget limit."""
+    ctx = RuntimeContext()
+    bm = BudgetManager(ctx.db)
+    removed = bm.remove_budget(budget_id)
+    if not removed:
+        console = get_console(color_mode=ctx.settings.color)
+        console.print(f"[red]Budget '{budget_id}' not found.[/red]")
+        raise typer.Exit(1)
+
+    if json_output:
+        emit_json("budget.remove", {"id": budget_id, "removed": True})
+        return
+
+    console = get_console(color_mode=ctx.settings.color)
+    console.print(f"[green]✓ Budget '{budget_id}' successfully removed.[/green]")

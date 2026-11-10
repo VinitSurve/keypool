@@ -190,7 +190,10 @@ class ProviderRegistry:
 
     def get_metadata(self, provider_name: str) -> ProviderMetadata | None:
         """Return public capability metadata for a provider."""
-        key = provider_name.strip().lower()
+        try:
+            key = validate_provider_name(provider_name)
+        except Exception:
+            key = provider_name.strip().lower()
         if key in PROVIDER_CATALOG:
             return PROVIDER_CATALOG[key]
         if key in self._custom_configs:
@@ -227,4 +230,8 @@ class ProviderRegistry:
         return [p.name for p in self.list_providers()]
 
     def is_registered(self, provider_name: str) -> bool:
-        return provider_name.strip().lower() in self._adapters
+        try:
+            key = validate_provider_name(provider_name)
+            return key in self._adapters
+        except Exception:
+            return False
